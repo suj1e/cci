@@ -1,0 +1,37 @@
+{
+  "name": "claude-feishu-bridge",
+  "version": "1.0.0",
+  "description": "Feishu bridge service for Claude CLI",
+  "main": "dist/index.js",
+  "bin": {
+    "feishu-bridge": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "start": "node dist/cli.js start",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "keywords": [
+    "feishu",
+    "bridge",
+    "claude",
+    "cli"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.24.0",
+    "@types/marked": "^6.0.0",
+    "commander": "^12.0.0",
+    "js-yaml": "^4.1.0",
+    "marked": "^17.0.4",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.11.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "cci-feishu-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Claude CLI Feishu Bridge",
+  "author": "CCI Team",
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:bridge": "pnpm --filter claude-feishu-bridge dev"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8"
+  }
+}
