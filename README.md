@@ -1,37 +1,45 @@
-# CCI - Claude CLI Feishu Bridge
+# CCI - Claude CLI 飞书桥
 
-将 Claude CLI 的强大能力带入飞书，通过飞书机器人远程操控本地开发环境。
+通过飞书远程操控本地 Claude CLI，随时随地使用 Claude Code 进行开发。
 
-## 功能亮点
+## 功能特性
 
-- **远程操控** - 在飞书中发送消息，本地 Claude CLI 执行并返回结果
-- **流式响应** - 实时流式输出，支持长内容智能分块
+- **远程操控** - 在飞书中发送消息，本地 Claude CLI 执行并实时返回结果
+- **流式响应** - 内容累积发送（200字符/500ms），体验流畅
 - **精美格式** - OpenClaw 风格卡片消息，完美渲染 Markdown、代码块、表格
-- **本地可操作** - 启动后仍可在本地终端直接操作 Claude CLI
-- **输入过滤** - 本地输入不会发送到飞书，避免干扰
+- **智能过滤** - 过滤终端 UI 元素（spinner、框架等），只保留实质内容
+- **双向操作** - 启动后可在本地终端和飞书中同时操作 Claude CLI
 
 ## 架构
 
 ```
-┌─────────┐    WebSocket    ┌─────────┐    WebSocket    ┌─────────┐
-│  飞书   │ ◄──────────────► │  Bridge │ ◄──────────────► │ Claude  │
-│  机器人 │                 │  Server │                 │   CLI   │
-└─────────┘                 └─────────┘                 └─────────┘
+┌────────────┐    WebSocket     ┌────────────┐    WebSocket     ┌────────────┐
+│  飞书机器人  │ ◄──────────────► │   Bridge   │ ◄──────────────► │ CLI Client │
+│            │   长连接          │   Server   │                  │   (PTY)    │
+└────────────┘                  └────────────┘                  └─────┬──────┘
+                                                                       │
+                                                                       ▼
+                                                                ┌────────────┐
+                                                                │ Claude CLI │
+                                                                └────────────┘
 ```
+
+**消息流程：**
+1. 用户在飞书发送消息给机器人
+2. Bridge 通过飞书 WebSocket 长连接接收消息
+3. Bridge 转发给已连接的 CLI Client
+4. CLI Client 写入 PTY（Claude CLI）
+5. PTY 输出经过过滤后流式返回
+6. Bridge 格式化后发送到飞书
 
 ## 快速开始
 
 ### 1. 安装
 
 ```bash
-# 克隆项目
 git clone https://github.com/suj1e/cci.git
 cd cci
-
-# 安装依赖
 pnpm install
-
-# 构建
 pnpm build
 ```
 
@@ -47,26 +55,19 @@ pnpm build
 ### 3. 配置 Bridge
 
 ```bash
-cd packages/bridge
-node dist/cli.js config --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET
+feishu-bridge config --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET
 ```
 
-配置文件存储于 `~/.feishu-bridge/config.yaml`
+配置文件位于 `~/.feishu-bridge/config.yaml`
 
 ### 4. 启动服务
 
 ```bash
-# 终端 1: 启动 Bridge
-cd packages/bridge
-node dist/cli.js start
-```
+# 终端 1: 启动 Bridge（守护进程模式）
+feishu-bridge start -d
 
-### 5. 启动 CLI 客户端
-
-```bash
-# 终端 2: 启动 CLI 客户端（会自动启动 Claude CLI）
-cd packages/cli-client
-node dist/cli.js
+# 终端 2: 启动 CLI Client
+fclaude
 ```
 
 现在可以在飞书中与机器人对话了！
@@ -76,18 +77,19 @@ node dist/cli.js
 ### Bridge 服务
 
 ```bash
-feishu-bridge start     # 启动服务
-feishu-bridge stop      # 停止服务
-feishu-bridge status    # 查看状态
-feishu-bridge config    # 配置凭证
-feishu-bridge logs      # 查看日志
+feishu-bridge start [-d]      # 启动服务（-d 后台运行）
+feishu-bridge stop            # 停止服务
+feishu-bridge restart [-d]    # 重启服务
+feishu-bridge status          # 查看状态
+feishu-bridge config          # 配置凭证
+feishu-bridge logs [-f]       # 查看日志（-f 实时跟踪）
 ```
 
-### CLI 客户端 (fclaude)
+### CLI 客户端
 
 ```bash
-fclaude                 # 启动客户端，连接到默认 Bridge
-fclaude --help          # 查看帮助
+fclaude                       # 启动客户端
+fclaude --help                # 查看帮助
 ```
 
 ### 健康检查
@@ -97,56 +99,99 @@ curl http://localhost:8989/health
 # {"status":"ok","hasCliConnection":true}
 ```
 
-## 消息格式化
+## 配置说明
 
-参考 OpenClaw 实现，提供优质的消息显示效果：
+配置文件：`~/.feishu-bridge/config.yaml`
 
-| 特性 | 说明 |
-|------|------|
-| **卡片消息** | 使用 `lark_md` 标签，完美渲染 Markdown |
-| **Post 消息** | 使用 `md` 标签，支持基础 Markdown |
-| **智能选择** | 代码块/表格/长内容自动使用卡片格式 |
-| **内容拆分** | 超长内容自动按段落/句子拆分为多张卡片 |
-| **标题美化** | 自动添加 Emoji 图标 (📌✨💡) |
-| **列表优化** | 无序列表使用 `•` 符号 |
-| **分割线** | 美化消息结构 |
-| **ANSI 清理** | 完善的终端控制字符清理 |
+```yaml
+appId: YOUR_APP_ID
+appSecret: YOUR_APP_SECRET
+port: 8989
+logLevel: info
+notifyUserIds:           # 接收通知的用户 open_id
+  - ou_xxx
+notifyOnStartup: true    # 服务启动时通知
+notifyOnConnection: true # CLI 连接时通知
+notifyOnDisconnection: true # CLI 断开时通知
+```
 
 ## 项目结构
 
 ```
 cci/
 ├── packages/
-│   ├── bridge/                 # 飞书桥接服务
-│   │   ├── src/
-│   │   │   ├── cli.ts          # CLI 入口
-│   │   │   ├── config/         # 配置管理
-│   │   │   ├── server/         # 核心逻辑
-│   │   │   │   ├── bridge.ts       # 消息桥接
-│   │   │   │   ├── feishuClient.ts # 飞书客户端
-│   │   │   │   └── localServer.ts  # 本地服务
-│   │   │   ├── utils/
-│   │   │   │   └── outputFormatter.ts # 输出格式化
-│   │   │   └── types.ts
-│   │   └── package.json
+│   ├── bridge/                    # 飞书桥接服务
+│   │   └── src/
+│   │       ├── cli.ts             # CLI 入口
+│   │       ├── config/            # 配置管理
+│   │       ├── server/
+│   │       │   ├── bridge.ts      # 核心消息路由
+│   │       │   ├── feishuClient.ts # 飞书 WebSocket 客户端
+│   │       │   └── localServer.ts # 本地 WebSocket 服务
+│   │       ├── protocol/          # 消息协议转换
+│   │       ├── utils/
+│   │       │   └── outputFormatter.ts # 输出格式化
+│   │       └── types.ts           # 类型定义
 │   │
-│   └── cli-client/             # CLI 客户端
-│       ├── src/
-│       │   └── client.ts       # PTY 包装 + WebSocket
-│       └── package.json
+│   └── cli-client/                # CLI 客户端
+│       └── src/
+│           ├── cli.ts             # CLI 入口
+│           ├── client.ts          # PTY 包装 + WebSocket
+│           ├── types.ts           # 类型定义
+│           └── filter/            # 输出过滤模块
+│               ├── PtyOutputFilter.ts    # 过滤器主类
+│               ├── VirtualTerminal.ts    # 虚拟终端模拟
+│               ├── InputTracker.ts       # 输入追踪
+│               ├── AnsiParser.ts         # ANSI 解析
+│               └── ClaudeUiDetector.ts   # UI 元素检测
 │
-├── openspec/                   # OpenSpec 规范
 ├── package.json
 └── pnpm-workspace.yaml
 ```
 
+## 核心模块
+
+### 输出过滤器 (cli-client/filter)
+
+CLI Client 使用多层过滤机制清理 PTY 输出：
+
+1. **VirtualTerminal** - 虚拟终端模拟器，处理光标移动、文本覆盖等
+2. **InputTracker** - 输入追踪，检测并过滤本地输入回显
+3. **AnsiParser** - ANSI 转义序列解析
+4. **ClaudeUiDetector** - 检测并过滤 Claude CLI 的 UI 元素：
+   - Spinner 动画字符
+   - 终端框架制表符
+   - 快捷键提示
+   - 状态提示符
+
+### 输出格式化 (bridge/utils)
+
+OutputFormatter 负责将清理后的内容转换为飞书格式：
+
+- **ANSI 清理** - 移除所有终端转义序列
+- **Markdown 美化** - 标题添加 emoji（# → 📌，## → ✨）
+- **智能拆分** - 超长内容按段落/句子拆分为多张卡片
+- **格式选择** - 代码块/表格/长内容使用卡片格式，短文本使用 Post 格式
+
+### 消息协议
+
+WebSocket 消息类型（`BridgeMessage`）：
+
+| 类型 | 方向 | 说明 |
+|------|------|------|
+| `user_message` | Bridge → CLI | 用户消息 |
+| `stream_chunk` | CLI → Bridge | 流式输出块 |
+| `stream_end` | CLI → Bridge | 流结束标记 |
+| `ping/pong` | 双向 | 心跳 |
+
 ## 技术栈
 
 - **TypeScript** - 类型安全
-- **Node.js** - 运行环境
+- **Node.js** (>=18) - 运行环境
 - **@larksuiteoapi/node-sdk** - 飞书官方 SDK
 - **node-pty** - PTY 终端模拟
-- **WebSocket** - 实时通信
+- **WebSocket (ws)** - 实时通信
+- **commander** - CLI 框架
 
 ## 开发
 
@@ -168,23 +213,7 @@ pnpm dev:bridge
 | 服务无法启动 | 检查端口 8989 是否被占用 |
 | CLI 无法连接 | 确保 Bridge 服务正在运行 |
 | 飞书无响应 | 检查应用权限、事件订阅配置 |
-| 消息格式乱码 | 已自动清理 ANSI，如仍有问题请反馈 |
-
-## 更新日志
-
-### v1.1.0 (2025-03-12)
-
-- OpenClaw 风格卡片消息格式
-- 内容累积发送 (200字符/500ms)
-- 输入回显过滤
-- 智能内容拆分
-- 完善 ANSI 清理
-
-### v1.0.0 (2024-03-11)
-
-- 初始版本
-- 基本消息转发
-- 流式响应支持
+| 消息格式异常 | 查看日志 `feishu-bridge logs -f` |
 
 ## License
 
