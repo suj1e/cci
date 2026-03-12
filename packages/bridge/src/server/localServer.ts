@@ -81,7 +81,10 @@ export class LocalServer {
 
   sendToCli(message: BridgeMessage): void {
     if (this.cliConnection && this.cliConnection.readyState === WebSocket.OPEN) {
-      this.cliConnection.send(JSON.stringify(message));
+      const jsonStr = JSON.stringify(message);
+      this.logger.debug(`[LOCAL] Sending to CLI: ${jsonStr.substring(0, 200)}`);
+      this.cliConnection.send(jsonStr);
+      this.logger.debug('[LOCAL] Message sent to CLI socket');
     } else {
       this.logger.warn('No CLI connection available, message not sent');
     }

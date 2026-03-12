@@ -2,6 +2,7 @@ import { LocalServer } from './localServer';
 import { FeishuClient } from './feishuClient';
 import { MessageConverter } from '../protocol/messageConverter';
 import { ConfigManager } from '../config/config';
+import { OutputFormatter } from '../utils/outputFormatter';
 import type { BridgeConfig, BridgeMessage } from '../types';
 import { Logger } from '../logger';
 import fs from 'fs';
@@ -21,6 +22,12 @@ export class FeishuBridge {
   private isStreaming = false;
   private logger = Logger.getInstance();
   private version: string;
+
+  // 累积发送相关
+  private pendingBuffer: string = '';
+  private flushTimer: NodeJS.Timeout | null = null;
+  private readonly FLUSH_THRESHOLD = 200; // 累积字符阈值
+  private readonly FLUSH_TIMEOUT = 500; // 超时刷新（毫秒）
 
   constructor(options: BridgeOptions) {
     this.config = options.config;
@@ -121,7 +128,7 @@ export class FeishuBridge {
     // 连接成功后主动发送通知（如果配置开启）
     if (this.config.notifyOnConnection !== false) {
       this.sendNotificationToAllUsers(
-        '✅ 已成功连接到Claude CLI会话！\n现在你发送的所有消息都会自动转发到CLI处理，响应会实时返回。'
+        '✅ 已连接到 Claude CLI 会话！\n现在发送的消息会自动转发给 Claude，响应会实时返回。'
       );
     }
   }
@@ -132,7 +139,7 @@ export class FeishuBridge {
     // 断开连接后主动发送通知（如果配置开启）
     if (this.config.notifyOnDisconnection !== false) {
       this.sendNotificationToAllUsers(
-        '❌ 已断开与Claude CLI会话的连接。\n需要使用时请在CLI中重新运行 `/connect-feishu`。'
+        '❌ 已断开与 Claude CLI 的连接。\n需要时请运行 fclaude 重新连接。'
       );
     }
   }
@@ -143,7 +150,7 @@ export class FeishuBridge {
     // 服务启动成功后发送通知（如果配置开启）
     if (this.config.notifyOnStartup !== false) {
       this.sendNotificationToAllUsers(
-        '🚀 Feishu bridge service 已启动成功！\n服务已正常运行，等待CLI连接...\n运行 `/connect-feishu` 即可开始使用。'
+        '🚀 Feishu bridge 已启动！\n服务正常运行，等待连接...\n运行 fclaude 即可开始使用。'
       );
     }
   }
@@ -187,13 +194,15 @@ export class FeishuBridge {
         userId: message.userId,
         timestamp: Date.now()
       };
+      this.logger.info(`[BRIDGE] Sending user_message to CLI: "${message.content.substring(0, 50)}..."`);
+      this.logger.info(`[BRIDGE] Full message: ${JSON.stringify(bridgeMessage)}`);
       this.localServer.sendToCli(bridgeMessage);
-      this.logger.debug('Message forwarded to CLI');
+      this.logger.info('[BRIDGE] Message sent to CLI successfully');
     } else {
       this.logger.warn('No CLI connection, cannot forward Feishu message');
       this.feishuClient.sendMessage(
         message.userId,
-        'Sorry, Claude CLI is not connected yet. Please run `/connect-feishu` in the CLI first.'
+        'Claude CLI 未连接。请运行 fclaude 连接后再试。'
       ).catch((error) => {
         this.logger.error('Failed to send notification to Feishu:', error);
       });
@@ -217,17 +226,119 @@ export class FeishuBridge {
   private handleStreamChunk(content: string): void {
     this.isStreaming = true;
     this.streamBuffer.push(content);
+
+    // 累积发送逻辑
+    if (this.currentUserId && OutputFormatter.hasContent(content)) {
+      const cleanContent = OutputFormatter.formatForFeishu(content);
+      this.pendingBuffer += cleanContent;
+
+      // 检查是否达到发送阈值
+      if (this.pendingBuffer.length >= this.FLUSH_THRESHOLD) {
+        this.flushPendingBuffer();
+      } else {
+        // 设置或重置超时刷新
+        this.scheduleFlush();
+      }
+    }
+  }
+
+  /**
+   * 安排超时刷新
+   */
+  private scheduleFlush(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+    }
+    this.flushTimer = setTimeout(() => {
+      this.flushPendingBuffer();
+    }, this.FLUSH_TIMEOUT);
+  }
+
+  /**
+   * 刷新待发送缓冲区
+   */
+  private flushPendingBuffer(): void {
+    if (!this.currentUserId || !this.pendingBuffer.trim()) {
+      return;
+    }
+
+    const userId = this.currentUserId;
+    const content = this.pendingBuffer.trim();
+    this.pendingBuffer = '';
+
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+
+    this.logger.info(`[STREAM] Sending accumulated content, length=${content.length}`);
+
+    // 判断是否使用卡片格式（代码块、表格、长内容）
+    if (OutputFormatter.shouldUseCard(content)) {
+      const card = OutputFormatter.toFeishuCard(content);
+      this.feishuClient.sendCardMessage(userId, card)
+        .catch((error) => {
+          this.logger.error('Failed to send card message to Feishu:', error);
+          // 降级为 Post 格式
+          const richContent = OutputFormatter.toFeishuPost(content);
+          this.feishuClient.sendRichMessage(userId, richContent)
+            .catch((err) => {
+              this.logger.error('Failed to send fallback post message:', err);
+            });
+        });
+    } else {
+      // 使用 Post 格式发送
+      const richContent = OutputFormatter.toFeishuPost(content);
+      this.feishuClient.sendRichMessage(userId, richContent)
+        .catch((error) => {
+          this.logger.error('Failed to send rich message to Feishu:', error);
+          // 降级为纯文本发送
+          this.feishuClient.sendMessage(userId, content)
+            .catch((err) => {
+              this.logger.error('Failed to send fallback text message:', err);
+            });
+        });
+    }
+  }
+
+  /**
+   * 清理 ANSI 转义码
+   */
+  private stripAnsi(text: string): string {
+    // eslint-disable-next-line no-control-regex
+    return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
   }
 
   private handleStreamEnd(): void {
-    const fullContent = MessageConverter.mergeStreamChunks(this.streamBuffer);
+    // 刷新剩余的累积内容
+    if (this.pendingBuffer.trim() && this.currentUserId) {
+      this.flushPendingBuffer();
+    }
 
-    if (this.currentUserId) {
-      const feishuPost = MessageConverter.markdownToFeishuPost(fullContent);
-      this.feishuClient.sendMessage(this.currentUserId, feishuPost)
-        .catch((error) => {
-          this.logger.error('Failed to send message to Feishu:', error);
-        });
+    // 发送原始流缓冲区的剩余内容（如果有）
+    if (this.streamBuffer.length > 0 && this.currentUserId) {
+      const remainingContent = MessageConverter.mergeStreamChunks(this.streamBuffer);
+      const cleanContent = OutputFormatter.formatForFeishu(remainingContent);
+      if (cleanContent.trim()) {
+        this.logger.info('[STREAM] Sending final accumulated content');
+
+        // 判断是否使用卡片格式
+        if (OutputFormatter.shouldUseCard(cleanContent)) {
+          const card = OutputFormatter.toFeishuCard(cleanContent);
+          this.feishuClient.sendCardMessage(this.currentUserId, card)
+            .then(() => this.logger.info('[STREAM] Final card message sent'))
+            .catch((error) => {
+              this.logger.error('Failed to send final card message:', error);
+            });
+        } else {
+          const richContent = OutputFormatter.toFeishuPost(cleanContent);
+          this.feishuClient.sendRichMessage(this.currentUserId, richContent)
+            .then(() => this.logger.info('[STREAM] Final message sent'))
+            .catch((error) => {
+              this.logger.error('Failed to send final message to Feishu:', error);
+            });
+        }
+      }
     }
 
     this.streamBuffer = [];

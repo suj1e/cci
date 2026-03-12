@@ -9,6 +9,11 @@ export class FeishuCliClient {
   private ptyProcess: pty.IPty | null = null;
   private state: ClientState = 'disconnected';
 
+  // 输入回显过滤
+  private inputBuffer: string = '';
+  private lastInputTime: number = 0;
+  private readonly INPUT_ECHO_TIMEOUT = 100; // 输入回显检测超时（毫秒）
+
   constructor(options: ClientOptions = {}) {
     this.options = {
       bridgeUrl: options.bridgeUrl || 'ws://localhost:8989/cli',
@@ -84,9 +89,46 @@ export class FeishuCliClient {
   private setupDataFlow(): void {
     if (!this.ptyProcess || !this.ws) return;
 
+    // 本地 stdin -> PTY（允许本地操作）
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.on('data', (data) => {
+      if (this.ptyProcess) {
+        const inputStr = data.toString();
+        // 记录输入用于过滤回显
+        this.inputBuffer += inputStr;
+        this.lastInputTime = Date.now();
+        this.ptyProcess.write(inputStr);
+      }
+    });
+
     // PTY 输出 -> stdout + WebSocket
     this.ptyProcess.onData((data) => {
+      // 本地输出始终显示
       process.stdout.write(data);
+
+      // 过滤输入回显 - 不发送本地输入的回显到飞书
+      const timeSinceInput = Date.now() - this.lastInputTime;
+      if (timeSinceInput < this.INPUT_ECHO_TIMEOUT && this.inputBuffer.length > 0) {
+        // 检查输出是否包含输入内容（回显）
+        const inputLines = this.inputBuffer.split('\n');
+        let filteredOutput = data;
+
+        for (const inputLine of inputLines) {
+          if (inputLine.trim() && filteredOutput.includes(inputLine)) {
+            // 这可能是输入回显，跳过发送
+            this.inputBuffer = this.inputBuffer.slice(inputLine.length);
+            return;
+          }
+        }
+
+        // 清理过期的输入缓冲
+        if (timeSinceInput > this.INPUT_ECHO_TIMEOUT) {
+          this.inputBuffer = '';
+        }
+      }
+
+      // 发送到 WebSocket（过滤后的输出）
       if (this.ws?.readyState === WebSocket.OPEN) {
         const msg: BridgeMessage = {
           type: 'stream_chunk',
@@ -102,23 +144,33 @@ export class FeishuCliClient {
     this.ws.on('message', (data) => {
       try {
         const msg = JSON.parse(data.toString()) as BridgeMessage;
+
         if (msg.type === 'user_message' && msg.content) {
-          // 注入到 PTY 作为用户输入
-          this.ptyProcess?.write(msg.content + '\n');
+          const content = msg.content.trim();
+          if (this.ptyProcess) {
+            this.ptyProcess.write(content);
+            this.ptyProcess.write('\r');
+          }
         }
+        // 忽略其他消息类型（pong 等）
       } catch (e) {
         // 忽略解析错误
       }
     });
 
     // PTY 退出 -> 关闭连接
-    this.ptyProcess.onExit(({ exitCode }) => {
-      this.stop();
+    this.ptyProcess.onExit(async ({ exitCode }) => {
+      await this.stop();
       process.exit(exitCode ?? 0);
     });
   }
 
   async stop(): Promise<void> {
+    // 恢复 stdin 状态
+    process.stdin.setRawMode(false);
+    process.stdin.pause();
+    process.stdin.removeAllListeners('data');
+
     if (this.ws) {
       // 发送流结束消息
       if (this.ws.readyState === WebSocket.OPEN) {
@@ -128,6 +180,7 @@ export class FeishuCliClient {
           timestamp: Date.now(),
         };
         this.ws.send(JSON.stringify(msg));
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
       this.ws.close();
       this.ws = null;

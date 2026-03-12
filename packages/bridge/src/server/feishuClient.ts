@@ -132,6 +132,59 @@ export class FeishuClient {
     }
   }
 
+  /**
+   * 发送富文本消息（飞书Post格式）
+   */
+  async sendRichMessage(userId: string, richContent: any): Promise<void> {
+    if (!this.isConnected) {
+      throw new Error('Not connected to Feishu');
+    }
+
+    try {
+      await this.client.im.message.create({
+        params: {
+          receive_id_type: 'open_id'
+        },
+        data: {
+          receive_id: userId,
+          msg_type: 'post',
+          content: JSON.stringify(richContent)
+        }
+      });
+      this.logger.debug('Rich message sent to Feishu');
+    } catch (error) {
+      this.logger.error('Failed to send rich message to Feishu:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 发送交互式卡片消息（Schema 2.0）
+   * 完美支持 Markdown 渲染：代码块、表格、粗体、斜体等
+   */
+  async sendCardMessage(userId: string, card: any): Promise<void> {
+    if (!this.isConnected) {
+      throw new Error('Not connected to Feishu');
+    }
+
+    try {
+      await this.client.im.message.create({
+        params: {
+          receive_id_type: 'open_id'
+        },
+        data: {
+          receive_id: userId,
+          msg_type: 'interactive',
+          content: JSON.stringify(card)
+        }
+      });
+      this.logger.debug('Card message sent to Feishu');
+    } catch (error) {
+      this.logger.error('Failed to send card message to Feishu:', error);
+      throw error;
+    }
+  }
+
   isClientConnected(): boolean {
     return this.isConnected;
   }
