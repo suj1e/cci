@@ -16,6 +16,7 @@ export class FeishuBridge {
   private localServer: LocalServer;
   private feishuClient: FeishuClient;
   private currentUserId: string | null = null;
+  private knownUserIds: Set<string> = new Set(); // 记录所有有过交互的用户ID
   private streamBuffer: string[] = [];
   private isStreaming = false;
   private logger = Logger.getInstance();
@@ -82,16 +83,69 @@ export class FeishuBridge {
     this.logger.info('Feishu Bridge Service stopped');
   }
 
+  /**
+   * 给所有配置的通知用户发送消息
+   */
+  private sendNotificationToAllUsers(content: string): void {
+    const notifyUsers = new Set<string>();
+
+    // 添加配置文件中的用户
+    if (this.config.notifyUserIds && Array.isArray(this.config.notifyUserIds)) {
+      this.logger.debug('Configured notify users:', this.config.notifyUserIds);
+      this.config.notifyUserIds.forEach(userId => notifyUsers.add(userId));
+    }
+
+    // 添加有过交互的用户
+    this.knownUserIds.forEach(userId => notifyUsers.add(userId));
+
+    // 如果有当前用户也加上
+    if (this.currentUserId) {
+      notifyUsers.add(this.currentUserId);
+    }
+
+    this.logger.debug('Sending notification to users:', Array.from(notifyUsers));
+
+    // 给所有用户发送通知
+    notifyUsers.forEach(userId => {
+      this.feishuClient.sendMessage(userId, content).then(() => {
+        this.logger.debug(`Notification sent to user ${userId} successfully`);
+      }).catch((error) => {
+        this.logger.error(`Failed to send notification to user ${userId}:`, error);
+      });
+    });
+  }
+
   private handleCliConnect(): void {
     this.logger.info('CLI connected - message forwarding active');
+
+    // 连接成功后主动发送通知（如果配置开启）
+    if (this.config.notifyOnConnection !== false) {
+      this.sendNotificationToAllUsers(
+        '✅ 已成功连接到Claude CLI会话！\n现在你发送的所有消息都会自动转发到CLI处理，响应会实时返回。'
+      );
+    }
   }
 
   private handleCliDisconnect(): void {
     this.logger.info('CLI disconnected - message forwarding stopped');
+
+    // 断开连接后主动发送通知（如果配置开启）
+    if (this.config.notifyOnDisconnection !== false) {
+      this.sendNotificationToAllUsers(
+        '❌ 已断开与Claude CLI会话的连接。\n需要使用时请在CLI中重新运行 `/connect-feishu`。'
+      );
+    }
   }
 
   private handleFeishuConnected(): void {
     this.logger.info('Feishu connected');
+
+    // 服务启动成功后发送通知（如果配置开启）
+    if (this.config.notifyOnStartup !== false) {
+      this.sendNotificationToAllUsers(
+        '🚀 Feishu bridge service 已启动成功！\n服务已正常运行，等待CLI连接...\n运行 `/connect-feishu` 即可开始使用。'
+      );
+    }
   }
 
   private handleFeishuDisconnected(): void {
@@ -123,6 +177,7 @@ export class FeishuBridge {
     }
 
     this.currentUserId = message.userId;
+    this.knownUserIds.add(message.userId); // 记录用户ID到已知用户列表
 
     if (this.localServer.hasCliConnection()) {
       const bridgeMessage: BridgeMessage = {

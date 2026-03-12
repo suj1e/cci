@@ -10,7 +10,10 @@ const CONFIG_FILE = path.join(CONFIG_DIR, 'config.yaml');
 
 const DEFAULT_CONFIG: Partial<BridgeConfig> = {
   port: 8989,
-  logLevel: 'info'
+  logLevel: 'info',
+  notifyOnStartup: true,
+  notifyOnConnection: true,
+  notifyOnDisconnection: true
 };
 
 export class ConfigManager {
@@ -68,7 +71,11 @@ export class ConfigManager {
       appId: 'your-app-id',
       appSecret: 'your-app-secret',
       port: 8989,
-      logLevel: 'info'
+      logLevel: 'info',
+      notifyUserIds: [], // 配置需要接收通知的用户openid，例如: ["ou_xxx123", "ou_xxx456"]
+      notifyOnStartup: true, // 服务启动时发送通知
+      notifyOnConnection: true, // CLI连接时发送通知
+      notifyOnDisconnection: true // CLI断开时发送通知
     };
 
     if (this.configExists()) {

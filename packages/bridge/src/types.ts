@@ -156,4 +156,8 @@ export interface BridgeConfig {
   appSecret: string;
   port?: number;
   logLevel?: 'debug' | 'info' | 'warn' | 'error';
+  notifyUserIds?: string[]; // 配置需要接收通知的用户openid列表
+  notifyOnStartup?: boolean; // 服务启动时是否发送通知
+  notifyOnConnection?: boolean; // CLI连接时是否发送通知
+  notifyOnDisconnection?: boolean; // CLI断开时是否发送通知
 }

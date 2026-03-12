@@ -1,0 +1,36 @@
+{
+  "name": "fclaude",
+  "version": "1.0.0",
+  "description": "CLI client for Feishu-Claude bridge with PTY wrapper",
+  "main": "dist/index.js",
+  "bin": {
+    "fclaude": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w",
+    "start": "node dist/cli.js"
+  },
+  "keywords": [
+    "feishu",
+    "claude",
+    "cli",
+    "pty",
+    "bridge"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^14.0.3",
+    "node-pty": "^1.0.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
