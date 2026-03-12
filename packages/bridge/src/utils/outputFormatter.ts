@@ -12,54 +12,60 @@ export class OutputFormatter {
    * 清理 ANSI 转义码和终端控制序列
    */
   static stripAnsi(text: string): string {
-    return text
-      // 标准 CSI 序列: ESC [ ... letter
-      .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
-      // OSC 序列: ESC ] ... BEL/ST
-      .replace(/\x1b\][^\x07]*\x07/g, '')
-      .replace(/\x1b\][^\x1b]*\x1b\\/g, '')
-      // DCS/PM/APC 序列
-      .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, '')
-      // 单字符转义序列
-      .replace(/\x1b[()][AB012]/g, '')
-      .replace(/\x1b[780DM]/g, '')
-      // 其他控制序列
-      .replace(/\x1b\[\?[0-9;]*[hl]/g, '')
-      .replace(/\x1b\[\![0-9;]*[a-zA-Z]/g, '')
-      // 清理残留的 ESC 字符
-      .replace(/\x1b/g, '');
+    return (
+      text
+        // 标准 CSI 序列: ESC [ ... letter
+        .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
+        // OSC 序列: ESC ] ... BEL/ST
+        .replace(/\x1b\][^\x07]*\x07/g, "")
+        .replace(/\x1b\][^\x1b]*\x1b\\/g, "")
+        // DCS/PM/APC 序列
+        .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, "")
+        // 单字符转义序列
+        .replace(/\x1b[()][AB012]/g, "")
+        .replace(/\x1b[780DM]/g, "")
+        // 其他控制序列
+        .replace(/\x1b\[\?[0-9;]*[hl]/g, "")
+        .replace(/\x1b\[\![0-9;]*[a-zA-Z]/g, "")
+        // 清理残留的 ESC 字符
+        .replace(/\x1b/g, "")
+    );
   }
 
   /**
    * 清理终端控制字符和残留标记
    */
   static stripControlChars(text: string): string {
-    return text
-      // 统一换行符
-      .replace(/\r\n/g, '\n')
-      .replace(/\r/g, '\n')
-      // 处理残留的 [0m [0G 等标记
-      .replace(/\[\d*[mGKF]/g, '')
-      .replace(/\[0m/g, '')
-      .replace(/\[0G/g, '')
-      // 处理不可见控制字符（保留换行和制表符）
-      .replace(/[\x00-\x1F\x7F]/g, (c) => c === '\n' || c === '\t' ? c : '')
-      // 处理退格符 ^H
-      .replace(/.\x08/g, '')
-      // 移除 NULL 和 BEL
-      .replace(/\x00/g, '')
-      .replace(/\x07/g, '');
+    return (
+      text
+        // 统一换行符
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        // 处理残留的 [0m [0G 等标记
+        .replace(/\[\d*[mGKF]/g, "")
+        .replace(/\[0m/g, "")
+        .replace(/\[0G/g, "")
+        // 处理不可见控制字符（保留换行和制表符）
+        .replace(/[\x00-\x1F\x7F]/g, (c) => (c === "\n" || c === "\t" ? c : ""))
+        // 处理退格符 ^H
+        .replace(/.\x08/g, "")
+        // 移除 NULL 和 BEL
+        .replace(/\x00/g, "")
+        .replace(/\x07/g, "")
+    );
   }
 
   /**
    * 移除 Claude CLI 的前缀提示
    */
   static stripClaudePrompts(text: string): string {
-    return text
-      .replace(/^Claude>\s*/gm, '')
-      .replace(/^(Thinking|Generating|Analyzing|Processing)\.*\s*/gm, '')
-      // 清理行首残留的方括号标记
-      .replace(/^\[.*?\]\s*/gm, '');
+    return (
+      text
+        .replace(/^Claude>\s*/gm, "")
+        .replace(/^(Thinking|Generating|Analyzing|Processing)\.*\s*/gm, "")
+        // 清理行首残留的方括号标记
+        .replace(/^\[.*?\]\s*/gm, "")
+    );
   }
 
   /**
@@ -76,16 +82,19 @@ export class OutputFormatter {
     result = this.stripClaudePrompts(result);
 
     // 修复被截断的 Markdown 链接
-    result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)[\s)]/g, '[$1]($2)');
+    result = result.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)[\s)]/g,
+      "[$1]($2)",
+    );
 
     // 合并多余空行（最多保留2个）
-    result = result.replace(/\n{3,}/g, '\n\n');
+    result = result.replace(/\n{3,}/g, "\n\n");
 
     // 清理行首行尾空格（代码块除外）
     result = this.trimLinesPreserveCodeBlocks(result);
 
     // 移除开头的空行
-    result = result.replace(/^\n+/, '');
+    result = result.replace(/^\n+/, "");
 
     return result;
   }
@@ -94,12 +103,12 @@ export class OutputFormatter {
    * 清理行首行尾空格，但保留代码块内的空格
    */
   private static trimLinesPreserveCodeBlocks(text: string): string {
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     let inCodeBlock = false;
     const result: string[] = [];
 
     for (const line of lines) {
-      if (line.trim().startsWith('```')) {
+      if (line.trim().startsWith("```")) {
         inCodeBlock = !inCodeBlock;
         result.push(line);
         continue;
@@ -114,7 +123,7 @@ export class OutputFormatter {
       }
     }
 
-    return result.join('\n');
+    return result.join("\n");
   }
 
   /**
@@ -132,9 +141,9 @@ export class OutputFormatter {
 
     // 优化标题显示（只处理 # 和 ##，### 保持不变）
     content = content
-      .replace(/^# (.+)$/gm, '### 📌 $1')  // 一级标题
-      .replace(/^## (.+)$/gm, '### ✨ $1') // 二级标题
-      .replace(/^(- .+)$/gm, '• $1');       // 无序列表优化
+      .replace(/^# (.+)$/gm, "### 📌 $1") // 一级标题
+      .replace(/^## (.+)$/gm, "### ✨ $1") // 二级标题
+      .replace(/^(- .+)$/gm, "• $1"); // 无序列表优化
 
     return content;
   }
@@ -142,25 +151,28 @@ export class OutputFormatter {
   /**
    * 智能拆分长内容（保持段落完整）
    */
-  static splitContent(content: string, maxLength: number = this.MAX_CARD_LENGTH): string[] {
-    const paragraphs = content.split('\n\n');
+  static splitContent(
+    content: string,
+    maxLength: number = this.MAX_CARD_LENGTH,
+  ): string[] {
+    const paragraphs = content.split("\n\n");
     const chunks: string[] = [];
-    let current = '';
+    let current = "";
 
     for (const para of paragraphs) {
       if (current.length + para.length + 2 <= maxLength) {
-        current += (current ? '\n\n' : '') + para;
+        current += (current ? "\n\n" : "") + para;
       } else {
         if (current) chunks.push(current);
 
         // 单个段落过长则按句子拆分
         if (para.length > maxLength) {
           const sentences = para.split(/(?<=[。！？.!?])\s+/);
-          let sentCurrent = '';
+          let sentCurrent = "";
 
           for (const sent of sentences) {
             if (sentCurrent.length + sent.length + 1 <= maxLength) {
-              sentCurrent += (sentCurrent ? ' ' : '') + sent;
+              sentCurrent += (sentCurrent ? " " : "") + sent;
             } else {
               if (sentCurrent) chunks.push(sentCurrent);
               sentCurrent = sent;
@@ -195,13 +207,9 @@ export class OutputFormatter {
 
     return {
       zh_cn: {
-        title: '',
-        content: [
-          [
-            { tag: 'md', text: cleanText }
-          ]
-        ]
-      }
+        title: "",
+        content: [[{ tag: "md", text: cleanText }]],
+      },
     };
   }
 
@@ -215,33 +223,33 @@ export class OutputFormatter {
     return {
       config: {
         wide_screen_mode: true,
-        enable_forward: true
+        enable_forward: true,
       },
       header: {
         title: {
-          tag: 'plain_text',
-          content: '🤖 Claude'
+          tag: "plain_text",
+          content: "🤖 Claude",
         },
-        template: 'blue'
+        template: "blue",
       },
       elements: [
         // 分割线
         {
-          tag: 'div',
+          tag: "div",
           text: {
-            tag: 'lark_md',
-            content: '────────────────'
-          }
+            tag: "lark_md",
+            content: "────────────────",
+          },
         },
         // 内容区域
         {
-          tag: 'div',
+          tag: "div",
           text: {
-            tag: 'lark_md',
-            content: formattedContent
-          }
-        }
-      ]
+            tag: "lark_md",
+            content: formattedContent,
+          },
+        },
+      ],
     };
   }
 
@@ -263,31 +271,32 @@ export class OutputFormatter {
     return chunks.map((chunk, index) => ({
       config: {
         wide_screen_mode: true,
-        enable_forward: true
+        enable_forward: true,
       },
       header: {
         title: {
-          tag: 'plain_text',
-          content: total > 1 ? `🤖 Claude (${index + 1}/${total})` : '🤖 Claude'
+          tag: "plain_text",
+          content:
+            total > 1 ? `🤖 Claude (${index + 1}/${total})` : "🤖 Claude",
         },
-        template: 'blue'
+        template: "blue",
       },
       elements: [
         {
-          tag: 'div',
+          tag: "div",
           text: {
-            tag: 'lark_md',
-            content: '────────────────'
-          }
+            tag: "lark_md",
+            content: "────────────────",
+          },
         },
         {
-          tag: 'div',
+          tag: "div",
           text: {
-            tag: 'lark_md',
-            content: chunk
-          }
-        }
-      ]
+            tag: "lark_md",
+            content: chunk,
+          },
+        },
+      ],
     }));
   }
 
@@ -298,7 +307,7 @@ export class OutputFormatter {
   static shouldUseCard(text: string): boolean {
     const cleanText = this.formatForFeishu(text);
     // 包含代码块或表格时使用卡片
-    if (cleanText.includes('```') || cleanText.includes('|')) {
+    if (cleanText.includes("```") || cleanText.includes("|")) {
       return true;
     }
     // 较长的内容也使用卡片
@@ -326,15 +335,15 @@ interface FeishuCardContent {
   };
   header: {
     title: {
-      tag: 'plain_text';
+      tag: "plain_text";
       content: string;
     };
     template: string;
   };
   elements: Array<{
-    tag: 'div' | 'markdown' | 'hr' | 'action' | 'note';
+    tag: "div" | "markdown" | "hr" | "action" | "note";
     text?: {
-      tag: 'lark_md' | 'plain_text';
+      tag: "lark_md" | "plain_text";
       content: string;
     };
     content?: string;

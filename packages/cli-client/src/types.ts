@@ -1,38 +1,59 @@
-/**
- * 与 bridge 通信的消息类型
- */
 export type BridgeMessageType =
-  | 'user_message'    // 从飞书收到的用户消息
-  | 'stream_chunk'    // CLI 输出流片段
-  | 'stream_end'      // 流结束标记
-  | 'cli_response'    // 完整的 CLI 响应
-  | 'ping'            // 心跳请求
-  | 'pong';           // 心跳响应
+  | 'user_message' | 'stream_chunk' | 'stream_end' | 'cli_response' | 'ping' | 'pong'
+  | 'thinking_start' | 'thinking_end' | 'text_start'
+  | 'tool_call' | 'tool_result'
+  | 'ask_user'
+  | 'prompt_confirm' | 'prompt_permission' | 'prompt_choice' | 'prompt_plan'
+  | 'skill_loading' | 'mcp_loading' | 'compacting'
+  | 'subagent_start' | 'subagent_stop'
+  | 'hook_blocked' | 'hook_warning' | 'notification'
+  | 'error_api' | 'error_tool'
+  | 'command_echo' | 'context_info' | 'diff_content';
 
-/**
- * Bridge 消息格式
- */
 export interface BridgeMessage {
   type: BridgeMessageType;
   id: string;
+  timestamp: number;
   content?: string;
   userId?: string;
-  timestamp: number;
+  // tool_call
+  toolName?: string;
+  toolDesc?: string;
+  toolStatus?: 'running' | 'done';
+  // tool_result
+  truncated?: boolean;
+  // prompt
+  question?: string;
+  message?: string;
+  options?: string[];
+  steps?: string[];
+  tool?: string;
+  target?: string;
+  // skill/mcp
+  skillName?: string;
+  serverName?: string;
+  loaded?: number;
+  total?: number;
+  done?: boolean;
+  // compacting/subagent
+  auto?: boolean;
+  agentType?: string;
+  desc?: string;
+  summary?: string;
+  // hook/error
+  hookName?: string;
+  errorType?: 'rate_limit' | 'context_full' | 'other';
+  // other
+  command?: string;
+  tokens?: number;
+  breakdown?: Record<string, number>;
+  fileName?: string;
 }
 
-/**
- * 客户端配置选项
- */
 export interface ClientOptions {
-  /** Bridge WebSocket URL */
-  bridgeUrl?: string;  // 默认 ws://localhost:8989/cli
-  /** 透传给 claude 的参数 */
+  bridgeUrl?: string;
   claudeArgs?: string[];
-  /** Bridge HTTP 地址（用于健康检查） */
-  bridgeHttpUrl?: string;  // 默认 http://localhost:8989
+  bridgeHttpUrl?: string;
 }
 
-/**
- * 客户端状态
- */
 export type ClientState = 'disconnected' | 'connecting' | 'connected' | 'error';

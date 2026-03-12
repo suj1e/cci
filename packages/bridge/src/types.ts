@@ -45,12 +45,12 @@ export interface FeishuWebSocketEvent {
 
 // WebSocket 消息类型
 export type MessageType =
-  | 'user_message'
-  | 'cli_response'
-  | 'stream_chunk'
-  | 'stream_end'
-  | 'ping'
-  | 'pong';
+  | "user_message"
+  | "cli_response"
+  | "stream_chunk"
+  | "stream_end"
+  | "ping"
+  | "pong";
 
 // 基础消息格式
 export interface BaseMessage {
@@ -61,38 +61,38 @@ export interface BaseMessage {
 
 // 用户消息（从飞书到CLI）
 export interface UserMessage extends BaseMessage {
-  type: 'user_message';
+  type: "user_message";
   content: string;
   userId: string;
 }
 
 // CLI响应（从CLI到飞书）
 export interface CliResponse extends BaseMessage {
-  type: 'cli_response';
+  type: "cli_response";
   content: string;
   conversationId?: string;
 }
 
 // 流式响应块
 export interface StreamChunk extends BaseMessage {
-  type: 'stream_chunk';
+  type: "stream_chunk";
   content: string;
   conversationId?: string;
 }
 
 // 流式响应结束
 export interface StreamEnd extends BaseMessage {
-  type: 'stream_end';
+  type: "stream_end";
   conversationId?: string;
 }
 
 // Ping/Pong消息
 export interface PingMessage extends BaseMessage {
-  type: 'ping';
+  type: "ping";
 }
 
 export interface PongMessage extends BaseMessage {
-  type: 'pong';
+  type: "pong";
 }
 
 // 消息联合类型
@@ -106,13 +106,13 @@ export type BridgeMessage =
 
 // 飞书富文本元素类型
 export type FeishuElementType =
-  | 'text'
-  | 'a'
-  | 'at'
-  | 'image'
-  | 'code_block'
-  | 'hr'
-  | 'md_block';
+  | "text"
+  | "a"
+  | "at"
+  | "image"
+  | "code_block"
+  | "hr"
+  | "md_block";
 
 // 飞书富文本元素
 export interface FeishuElement {
@@ -155,7 +155,7 @@ export interface BridgeConfig {
   appId: string;
   appSecret: string;
   port?: number;
-  logLevel?: 'debug' | 'info' | 'warn' | 'error';
+  logLevel?: "debug" | "info" | "warn" | "error";
   notifyUserIds?: string[]; // 配置需要接收通知的用户openid列表
   notifyOnStartup?: boolean; // 服务启动时是否发送通知
   notifyOnConnection?: boolean; // CLI连接时是否发送通知

@@ -1,8 +1,8 @@
-import http from 'http';
-import WebSocket, { WebSocketServer } from 'ws';
-import { MessageConverter } from '../protocol/messageConverter';
-import { Logger } from '../logger';
-import type { BridgeMessage } from '../types';
+import http from "http";
+import WebSocket, { WebSocketServer } from "ws";
+import { MessageConverter } from "../protocol/messageConverter";
+import { Logger } from "../logger";
+import type { BridgeMessage } from "../types";
 
 interface LocalServerOptions {
   port: number;
@@ -22,12 +22,12 @@ export class LocalServer {
   constructor(options: LocalServerOptions) {
     this.options = options;
     this.server = http.createServer(this.handleHttpRequest.bind(this));
-    this.wss = new WebSocketServer({ server: this.server, path: '/cli' });
+    this.wss = new WebSocketServer({ server: this.server, path: "/cli" });
   }
 
   getPort(): number {
     const address = this.server.address();
-    if (address && typeof address === 'object') {
+    if (address && typeof address === "object") {
       return address.port;
     }
     return this.options.port;
@@ -38,13 +38,15 @@ export class LocalServer {
       try {
         this.server.listen(this.options.port, () => {
           this.isRunning = true;
-          this.logger.info(`Local server listening on port ${this.options.port}`);
+          this.logger.info(
+            `Local server listening on port ${this.options.port}`,
+          );
           this.setupWebSocketHandlers();
           resolve();
         });
 
-        this.server.on('error', (error) => {
-          this.logger.error('Local server error:', error);
+        this.server.on("error", (error) => {
+          this.logger.error("Local server error:", error);
           reject(error);
         });
       } catch (error) {
@@ -62,17 +64,17 @@ export class LocalServer {
 
       this.wss.close((error) => {
         if (error) {
-          this.logger.error('Error closing WebSocket server:', error);
+          this.logger.error("Error closing WebSocket server:", error);
         }
       });
 
       this.server.close((error) => {
         this.isRunning = false;
         if (error) {
-          this.logger.error('Error closing HTTP server:', error);
+          this.logger.error("Error closing HTTP server:", error);
           reject(error);
         } else {
-          this.logger.info('Local server stopped');
+          this.logger.info("Local server stopped");
           resolve();
         }
       });
@@ -80,93 +82,111 @@ export class LocalServer {
   }
 
   sendToCli(message: BridgeMessage): void {
-    if (this.cliConnection && this.cliConnection.readyState === WebSocket.OPEN) {
+    if (
+      this.cliConnection &&
+      this.cliConnection.readyState === WebSocket.OPEN
+    ) {
       const jsonStr = JSON.stringify(message);
       this.logger.debug(`[LOCAL] Sending to CLI: ${jsonStr.substring(0, 200)}`);
       this.cliConnection.send(jsonStr);
-      this.logger.debug('[LOCAL] Message sent to CLI socket');
+      this.logger.debug("[LOCAL] Message sent to CLI socket");
     } else {
-      this.logger.warn('No CLI connection available, message not sent');
+      this.logger.warn("No CLI connection available, message not sent");
     }
   }
 
   hasCliConnection(): boolean {
-    return this.cliConnection !== null && this.cliConnection.readyState === WebSocket.OPEN;
+    return (
+      this.cliConnection !== null &&
+      this.cliConnection.readyState === WebSocket.OPEN
+    );
   }
 
-  private handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-    res.setHeader('Content-Type', 'application/json');
-    
-    if (req.url === '/health') {
+  private handleHttpRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): void {
+    res.setHeader("Content-Type", "application/json");
+
+    if (req.url === "/health") {
       res.writeHead(200);
-      res.end(JSON.stringify({
-        status: 'ok',
-        hasCliConnection: this.hasCliConnection()
-      }));
+      res.end(
+        JSON.stringify({
+          status: "ok",
+          hasCliConnection: this.hasCliConnection(),
+        }),
+      );
     } else {
       res.writeHead(404);
-      res.end(JSON.stringify({ error: 'Not found' }));
+      res.end(JSON.stringify({ error: "Not found" }));
     }
   }
 
   private setupWebSocketHandlers(): void {
-    this.wss.on('connection', (ws) => {
-      this.logger.info('New CLI connection attempt');
+    this.wss.on("connection", (ws) => {
+      this.logger.info("New CLI connection attempt");
 
-      if (this.cliConnection && this.cliConnection.readyState === WebSocket.OPEN) {
-        this.logger.warn('Rejecting new CLI connection - session already exists');
-        ws.close(1008, 'Session already exists');
+      if (
+        this.cliConnection &&
+        this.cliConnection.readyState === WebSocket.OPEN
+      ) {
+        this.logger.warn(
+          "Rejecting new CLI connection - session already exists",
+        );
+        ws.close(1008, "Session already exists");
         return;
       }
 
       this.cliConnection = ws;
-      this.logger.info('CLI connected successfully');
+      this.logger.info("CLI connected successfully");
 
       if (this.options.onCliConnect) {
         this.options.onCliConnect();
       }
 
-      ws.on('message', (data) => {
+      ws.on("message", (data) => {
         try {
           const message = JSON.parse(data.toString()) as BridgeMessage;
           this.handleCliMessage(message);
         } catch (error) {
-          this.logger.error('Failed to parse message from CLI:', error);
+          this.logger.error("Failed to parse message from CLI:", error);
         }
       });
 
-      ws.on('close', () => {
-        this.logger.info('CLI disconnected');
+      ws.on("close", () => {
+        this.logger.info("CLI disconnected");
         this.cliConnection = null;
         if (this.options.onCliDisconnect) {
           this.options.onCliDisconnect();
         }
       });
 
-      ws.on('error', (error) => {
-        this.logger.error('CLI connection error:', error);
+      ws.on("error", (error) => {
+        this.logger.error("CLI connection error:", error);
       });
     });
   }
 
   private handleCliMessage(message: BridgeMessage): void {
     switch (message.type) {
-      case 'ping':
+      case "ping":
         this.sendToCli({
-          type: 'pong',
+          type: "pong",
           id: MessageConverter.generateId(),
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
         break;
-      case 'cli_response':
-      case 'stream_chunk':
-      case 'stream_end':
+      case "cli_response":
+      case "stream_chunk":
+      case "stream_end":
         if (this.options.onMessageFromCli) {
           this.options.onMessageFromCli(message);
         }
         break;
       default:
-        this.logger.debug('Received unknown message type:', message.type);
+        if (this.options.onMessageFromCli) {
+          this.options.onMessageFromCli(message);
+        }
     }
   }
 }

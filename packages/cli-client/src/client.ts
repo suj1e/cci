@@ -1,20 +1,20 @@
-import * as pty from 'node-pty';
-import WebSocket from 'ws';
-import http from 'http';
-import { BridgeMessage, ClientOptions, ClientState } from './types';
-import { PtyOutputFilter } from './filter';
+import * as pty from "node-pty";
+import WebSocket from "ws";
+import http from "http";
+import { BridgeMessage, ClientOptions, ClientState } from "./types";
+import { PtyOutputFilter } from "./filter";
 
 export class FeishuCliClient {
   private options: Required<ClientOptions>;
   private ws: WebSocket | null = null;
   private ptyProcess: pty.IPty | null = null;
-  private state: ClientState = 'disconnected';
+  private state: ClientState = "disconnected";
   private outputFilter: PtyOutputFilter;
 
   constructor(options: ClientOptions = {}) {
     this.options = {
-      bridgeUrl: options.bridgeUrl || 'ws://localhost:8989/cli',
-      bridgeHttpUrl: options.bridgeHttpUrl || 'http://localhost:8989',
+      bridgeUrl: options.bridgeUrl || "ws://localhost:8989/cli",
+      bridgeHttpUrl: options.bridgeHttpUrl || "http://localhost:8989",
       claudeArgs: options.claudeArgs || [],
     };
 
@@ -29,7 +29,9 @@ export class FeishuCliClient {
     // 1. 检查 bridge 健康状态
     const health = await this.checkBridgeHealth();
     if (!health) {
-      throw new Error('feishu-bridge 服务未运行，请先启动: feishu-bridge start');
+      throw new Error(
+        "feishu-bridge 服务未运行，请先启动: feishu-bridge start",
+      );
     }
 
     // 2. 连接 WebSocket
@@ -47,7 +49,7 @@ export class FeishuCliClient {
       const req = http.get(`${this.options.bridgeHttpUrl}/health`, (res) => {
         resolve(res.statusCode === 200);
       });
-      req.on('error', () => resolve(false));
+      req.on("error", () => resolve(false));
       req.setTimeout(2000, () => {
         req.destroy();
         resolve(false);
@@ -57,31 +59,31 @@ export class FeishuCliClient {
 
   private async connectWebSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.state = 'connecting';
+      this.state = "connecting";
       this.ws = new WebSocket(this.options.bridgeUrl);
 
-      this.ws.on('open', () => {
-        this.state = 'connected';
-        console.log('已连接到 feishu-bridge');
+      this.ws.on("open", () => {
+        this.state = "connected";
+        console.log("已连接到 feishu-bridge");
         resolve();
       });
 
-      this.ws.on('error', (error) => {
-        this.state = 'error';
+      this.ws.on("error", (error) => {
+        this.state = "error";
         reject(new Error(`WebSocket 连接失败: ${error.message}`));
       });
 
-      this.ws.on('close', () => {
-        this.state = 'disconnected';
-        console.log('已断开与 feishu-bridge 的连接');
+      this.ws.on("close", () => {
+        this.state = "disconnected";
+        console.log("已断开与 feishu-bridge 的连接");
       });
     });
   }
 
   private startPty(): void {
     const args = this.options.claudeArgs;
-    this.ptyProcess = pty.spawn('claude', args, {
-      name: 'xterm-256color',
+    this.ptyProcess = pty.spawn("claude", args, {
+      name: "xterm-256color",
       cols: process.stdout.columns || 80,
       rows: process.stdout.rows || 24,
       cwd: process.cwd(),
@@ -91,7 +93,7 @@ export class FeishuCliClient {
     // 更新过滤器终端尺寸
     this.outputFilter.resize(
       process.stdout.columns || 80,
-      process.stdout.rows || 24
+      process.stdout.rows || 24,
     );
   }
 
@@ -101,7 +103,7 @@ export class FeishuCliClient {
     // 本地 stdin -> PTY（允许本地操作）
     process.stdin.setRawMode(true);
     process.stdin.resume();
-    process.stdin.on('data', (data) => {
+    process.stdin.on("data", (data) => {
       if (this.ptyProcess) {
         // 记录输入到过滤器（用于回显检测）
         this.outputFilter.recordInput(data.toString());
@@ -120,7 +122,7 @@ export class FeishuCliClient {
       // 发送过滤后的内容到 WebSocket
       if (result.hasContent && this.ws?.readyState === WebSocket.OPEN) {
         const msg: BridgeMessage = {
-          type: 'stream_chunk',
+          type: "stream_chunk",
           id: Date.now().toString(),
           content: result.text,
           timestamp: Date.now(),
@@ -130,17 +132,17 @@ export class FeishuCliClient {
     });
 
     // WebSocket 消息 -> PTY
-    this.ws.on('message', (data) => {
+    this.ws.on("message", (data) => {
       try {
         const msg = JSON.parse(data.toString()) as BridgeMessage;
 
-        if (msg.type === 'user_message' && msg.content) {
+        if (msg.type === "user_message" && msg.content) {
           const content = msg.content.trim();
           if (this.ptyProcess) {
             // 记录远程输入（用于回显检测）
             this.outputFilter.recordInput(content);
             this.ptyProcess.write(content);
-            this.ptyProcess.write('\r');
+            this.ptyProcess.write("\r");
           }
         }
         // 忽略其他消息类型（pong 等）
@@ -156,15 +158,15 @@ export class FeishuCliClient {
     });
 
     // 终端尺寸变化
-    process.stdout.on('resize', () => {
+    process.stdout.on("resize", () => {
       if (this.ptyProcess) {
         this.ptyProcess.resize(
           process.stdout.columns || 80,
-          process.stdout.rows || 24
+          process.stdout.rows || 24,
         );
         this.outputFilter.resize(
           process.stdout.columns || 80,
-          process.stdout.rows || 24
+          process.stdout.rows || 24,
         );
       }
     });
@@ -174,18 +176,18 @@ export class FeishuCliClient {
     // 恢复 stdin 状态
     process.stdin.setRawMode(false);
     process.stdin.pause();
-    process.stdin.removeAllListeners('data');
+    process.stdin.removeAllListeners("data");
 
     if (this.ws) {
       // 发送流结束消息
       if (this.ws.readyState === WebSocket.OPEN) {
         const msg: BridgeMessage = {
-          type: 'stream_end',
+          type: "stream_end",
           id: Date.now().toString(),
           timestamp: Date.now(),
         };
         this.ws.send(JSON.stringify(msg));
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
       this.ws.close();
       this.ws = null;
@@ -199,7 +201,7 @@ export class FeishuCliClient {
     // 重置过滤器
     this.outputFilter.reset();
 
-    this.state = 'disconnected';
+    this.state = "disconnected";
   }
 
   getState(): ClientState {
