@@ -275,8 +275,13 @@ export class FeishuBridge {
 
     // 判断是否使用卡片格式（代码块、表格、长内容）
     if (OutputFormatter.shouldUseCard(content)) {
-      const card = OutputFormatter.toFeishuCard(content);
-      this.feishuClient.sendCardMessage(userId, card)
+      // 使用支持分块的卡片生成方法
+      const cards = OutputFormatter.toFeishuCards(content);
+
+      // 依次发送所有卡片
+      cards.reduce((promise, card) => {
+        return promise.then(() => this.feishuClient.sendCardMessage(userId, card));
+      }, Promise.resolve())
         .catch((error) => {
           this.logger.error('Failed to send card message to Feishu:', error);
           // 降级为 Post 格式
@@ -317,6 +322,7 @@ export class FeishuBridge {
 
     // 发送原始流缓冲区的剩余内容（如果有）
     if (this.streamBuffer.length > 0 && this.currentUserId) {
+      const userId = this.currentUserId;
       const remainingContent = MessageConverter.mergeStreamChunks(this.streamBuffer);
       const cleanContent = OutputFormatter.formatForFeishu(remainingContent);
       if (cleanContent.trim()) {
@@ -324,15 +330,18 @@ export class FeishuBridge {
 
         // 判断是否使用卡片格式
         if (OutputFormatter.shouldUseCard(cleanContent)) {
-          const card = OutputFormatter.toFeishuCard(cleanContent);
-          this.feishuClient.sendCardMessage(this.currentUserId, card)
-            .then(() => this.logger.info('[STREAM] Final card message sent'))
+          const cards = OutputFormatter.toFeishuCards(cleanContent);
+
+          cards.reduce((promise, card) => {
+            return promise.then(() => this.feishuClient.sendCardMessage(userId, card));
+          }, Promise.resolve())
+            .then(() => this.logger.info('[STREAM] Final card messages sent'))
             .catch((error) => {
               this.logger.error('Failed to send final card message:', error);
             });
         } else {
           const richContent = OutputFormatter.toFeishuPost(cleanContent);
-          this.feishuClient.sendRichMessage(this.currentUserId, richContent)
+          this.feishuClient.sendRichMessage(userId, richContent)
             .then(() => this.logger.info('[STREAM] Final message sent'))
             .catch((error) => {
               this.logger.error('Failed to send final message to Feishu:', error);
