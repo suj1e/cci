@@ -7,6 +7,7 @@
 export type LineEvent =
   | { type: 'thinking_start' }
   | { type: 'thinking_end' }
+  | { type: 'text_start' }
   | { type: 'tool_call'; toolName: string; toolDesc: string; status: 'running' | 'done' }
   | { type: 'tool_result'; content: string }
   | { type: 'ask_user'; question: string }

@@ -2,7 +2,15 @@ import { LocalServer } from './localServer';
 import { FeishuClient, FeishuActionPayload } from './feishuClient';
 import { MessageConverter } from '../protocol/messageConverter';
 import { OutputFormatter, ToolRecord, FeishuCardV2 } from '../utils/outputFormatter';
-import type { BridgeConfig, BridgeMessage } from '../types';
+import type {
+  BridgeConfig, BridgeMessage,
+  ToolCallMessage, ToolResultMessage,
+  SkillLoadingMessage, McpLoadingMessage,
+  SubagentStartMessage,
+  HookBlockedMessage, HookWarningMessage,
+  ApiErrorMessage, ToolErrorMessage,
+  DiffContentMessage
+} from '../types';
 import { Logger } from '../logger';
 import fs from 'fs';
 import path from 'path';
@@ -130,7 +138,7 @@ export class FeishuBridge {
       case 'subagent_start':   this.onSubagentStart(message); break;
       case 'hook_blocked':     this.onHookBlocked(message); break;
       case 'hook_warning':     this.onHookWarning(message); break;
-      case 'notification':     this.onNotification(message.content); break;
+      case 'notification':     this.onNotification(message.message); break;
       case 'error_api':        this.onApiError(message); break;
       case 'error_tool':       this.onToolError(message); break;
       case 'command_echo':     this.onCommandEcho(message.command); break;
@@ -256,7 +264,7 @@ export class FeishuBridge {
 
   // ── 状态机：tool_call / tool_result ──────────────────────────────────────
 
-  private onToolCall(msg: BridgeMessage): void {
+  private onToolCall(msg: ToolCallMessage): void {
     if (this.phase === 'idle' || this.phase === 'thinking') {
       if (this.phase === 'idle') this.initStatusCard();
       this.phase = 'tool_calling';
@@ -281,7 +289,7 @@ export class FeishuBridge {
     this.schedulePatch();
   }
 
-  private onToolResult(msg: BridgeMessage): void {
+  private onToolResult(msg: ToolResultMessage): void {
     // 把结果挂到最近一个 running 工具上
     const content = msg.content ?? '';
     const lastTool = [...this.toolCalls].reverse().find(t => t.status === 'running');
@@ -406,7 +414,7 @@ export class FeishuBridge {
 
   // ── 状态事件 ─────────────────────────────────────────────────────────────
 
-  private onSkillLoading(msg: BridgeMessage): void {
+  private onSkillLoading(msg: SkillLoadingMessage): void {
     if (!this.currentUserId) return;
     // skill loading 显示在状态卡片里（追加一行），不单独发卡片
     const line = msg.loaded !== undefined
@@ -416,7 +424,7 @@ export class FeishuBridge {
     this.schedulePatch();
   }
 
-  private onMcpLoading(msg: BridgeMessage): void {
+  private onMcpLoading(msg: McpLoadingMessage): void {
     const desc = msg.done ? `✓ MCP: ${msg.serverName}` : `MCP: ${msg.serverName}`;
     const existing = this.toolCalls.find(t => t.name === 'MCP' && t.desc.includes(msg.serverName ?? ''));
     if (existing) {
@@ -436,20 +444,20 @@ export class FeishuBridge {
     ).catch(() => {});
   }
 
-  private onSubagentStart(msg: BridgeMessage): void {
+  private onSubagentStart(msg: SubagentStartMessage): void {
     this.toolCalls.push({ name: 'Agent', desc: `${msg.agentType ?? 'subagent'}: ${msg.desc ?? ''}`, status: 'running', emoji: '🤖' });
     this.schedulePatch();
   }
 
-  private async onHookBlocked(msg: BridgeMessage): Promise<void> {
+  private async onHookBlocked(msg: HookBlockedMessage): Promise<void> {
     if (!this.currentUserId) return;
     await this.feishuClient.sendCardMessage(
       this.currentUserId,
-      OutputFormatter.buildHookBlockedCard(msg.hookName ?? 'hook', msg.message ?? ''),
+      OutputFormatter.buildHookBlockedCard(msg.hookName ?? 'hook', msg.reason ?? ''),
     ).catch(() => {});
   }
 
-  private async onHookWarning(msg: BridgeMessage): Promise<void> {
+  private async onHookWarning(msg: HookWarningMessage): Promise<void> {
     if (!this.currentUserId) return;
     await this.feishuClient.sendCardMessage(
       this.currentUserId,
@@ -465,19 +473,19 @@ export class FeishuBridge {
     ).catch(() => {});
   }
 
-  private async onApiError(msg: BridgeMessage): Promise<void> {
+  private async onApiError(msg: ApiErrorMessage): Promise<void> {
     if (!this.currentUserId) return;
     await this.feishuClient.sendCardMessage(
       this.currentUserId,
-      OutputFormatter.buildApiErrorCard(msg.errorType ?? 'other', msg.content ?? ''),
+      OutputFormatter.buildApiErrorCard(msg.errorType ?? 'other', msg.message ?? ''),
     ).catch(() => {});
   }
 
-  private async onToolError(msg: BridgeMessage): Promise<void> {
+  private async onToolError(msg: ToolErrorMessage): Promise<void> {
     if (!this.currentUserId) return;
     await this.feishuClient.sendCardMessage(
       this.currentUserId,
-      OutputFormatter.buildErrorCard(msg.toolName ?? 'Tool', msg.content ?? ''),
+      OutputFormatter.buildErrorCard(msg.toolName ?? 'Tool', msg.message ?? ''),
     ).catch(() => {});
   }
 
@@ -489,7 +497,7 @@ export class FeishuBridge {
     ).catch(() => {});
   }
 
-  private async onDiffContent(msg: BridgeMessage): Promise<void> {
+  private async onDiffContent(msg: DiffContentMessage): Promise<void> {
     if (!msg.content || !this.currentUserId) return;
     await this.feishuClient.sendCardMessage(
       this.currentUserId,
