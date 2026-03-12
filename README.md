@@ -130,16 +130,25 @@ feishu-bridge config --app-id <ID> --app-secret <SECRET>
 
 - **飞书 → Claude CLI**：直接转发用户消息
 - **Claude CLI → 飞书**：返回处理结果和输出
+- **输入回显过滤**：本地 CLI 输入不会发送到飞书
 
 ### 2. 流式响应支持
 
-支持 Claude CLI 的流式响应，分块实时显示在飞书中。
+- 支持 Claude CLI 的流式响应
+- **内容累积发送**：200 字符或 500ms 超时后发送，避免逐字发送
+- 智能消息分块
 
-### 3. Markdown 转换
+### 3. 飞书消息格式化
 
-- **代码块高亮**：支持多种编程语言的代码高亮
-- **格式保持**：表格、列表、引用等 Markdown 元素的完整转换
-- **表情符号**：支持基本的表情符号显示
+参考 OpenClaw 实现，提供优质的消息显示效果：
+
+- **卡片消息**：使用 `lark_md` 标签，完美支持 Markdown 渲染
+- **Post 消息**：使用 `md` 标签，支持基础 Markdown
+- **智能选择**：代码块、表格、长内容自动使用卡片格式
+- **标题美化**：自动添加 Emoji 图标
+- **列表优化**：无序列表使用 `•` 符号
+- **分割线**：美化消息结构
+- **允许转发**：卡片消息支持转发功能
 
 ### 4. 会话管理
 
@@ -192,9 +201,19 @@ packages/bridge/
 │   ├── config/             # 配置管理
 │   ├── protocol/           # 消息转换和协议处理
 │   ├── server/             # 服务器核心逻辑
+│   │   ├── bridge.ts       # 桥接主逻辑
+│   │   ├── feishuClient.ts # 飞书客户端
+│   │   └── localServer.ts  # 本地 WebSocket 服务器
+│   ├── utils/              # 工具函数
+│   │   └── outputFormatter.ts  # 输出格式化（ANSI 清理、飞书格式转换）
 │   └── types.ts            # 类型定义
 ├── dist/                   # 编译输出目录
 └── package.json
+
+packages/cli-client/
+├── src/
+│   └── client.ts           # CLI 客户端（PTY 包装、WebSocket 连接）
+└── dist/
 ```
 
 ### 构建和测试
@@ -221,6 +240,15 @@ npm run dev
 - 编写单元测试
 
 ## 更新日志
+
+### v1.1.0 (2025-03-12)
+
+- **OpenClaw 风格卡片消息**：使用 `lark_md` 标签，完美渲染 Markdown
+- **内容累积发送**：200 字符/500ms 阈值，避免逐字发送
+- **输入回显过滤**：本地 CLI 输入不会发送到飞书
+- **OutputFormatter 工具**：统一处理 ANSI 清理和格式转换
+- **标题 Emoji 美化**：自动为标题添加图标
+- **智能消息格式选择**：代码块/表格/长内容自动使用卡片格式
 
 ### v1.0.0 (2024-03-11)
 
