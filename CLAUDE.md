@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 CCI (Claude CLI Feishu Bridge) enables remote control of a local Claude CLI through Feishu messaging. It consists of two packages:
 
 - **bridge** (`claude-feishu-bridge`) - Feishu bot integration server
-- **cli-client** (`fclaude`) - PTY wrapper for Claude CLI with advanced output filtering
+- **cli-client** (`fclaude`) - PTY wrapper for Claude CLI with semantic event extraction
 
 ## Architecture
 
@@ -20,8 +20,8 @@ Message flow:
 2. Bridge receives via Feishu WebSocket long connection
 3. Bridge forwards to connected CLI client
 4. CLI client writes to PTY (Claude CLI)
-5. PTY output is filtered and streamed back
-6. Bridge formats and sends to Feishu
+5. PTY output is parsed for semantic events and filtered
+6. Bridge formats as Feishu cards and sends
 
 ## Development Commands
 
@@ -47,6 +47,9 @@ cd packages/cli-client && node dist/cli.js
 
 # View bridge logs
 cd packages/bridge && node dist/cli.js logs -f
+
+# Run tests
+cd packages/bridge && pnpm test
 ```
 
 ## Key Files
@@ -56,86 +59,95 @@ cd packages/bridge && node dist/cli.js logs -f
 | File | Purpose |
 |------|---------|
 | `src/cli.ts` | CLI entry point with start/stop/config/logs commands |
-| `src/server/bridge.ts` | Core message routing, stream accumulation, notification handling |
-| `src/server/feishuClient.ts` | Feishu WebSocket/API client |
+| `src/server/bridge.ts` | Core message routing, state machine, card management |
+| `src/server/feishuClient.ts` | Feishu WebSocket/API client, card callbacks |
 | `src/server/localServer.ts` | Local WebSocket server for CLI client |
-| `src/utils/outputFormatter.ts` | ANSI cleaning, Feishu card/post formatting |
+| `src/utils/outputFormatter.ts` | ANSI cleaning, Feishu card templates, content splitting |
 | `src/protocol/messageConverter.ts` | Markdown to Feishu format conversion |
 | `src/config/config.ts` | Config file management (~/.feishu-bridge/config.yaml) |
-| `src/types.ts` | Bridge message types and Feishu API types |
+| `src/types.ts` | Strongly typed message interfaces |
 
 ### CLI Client Package
 
 | File | Purpose |
 |------|---------|
-| `src/cli.ts` | CLI entry point |
+| `src/cli.ts` | CLI entry point, argument passthrough to claude |
 | `src/client.ts` | PTY wrapper, WebSocket connection, data flow setup |
-| `src/filter/PtyOutputFilter.ts` | Main filter class orchestrating all filtering |
+| `src/filter/PtyOutputFilter.ts` | Main filter orchestrating all filtering layers |
 | `src/filter/VirtualTerminal.ts` | Virtual terminal emulator for cursor handling |
 | `src/filter/InputTracker.ts` | Track user input for echo detection |
 | `src/filter/AnsiParser.ts` | Parse ANSI escape sequences |
-| `src/filter/ClaudeUiDetector.ts` | Detect and filter Claude CLI UI elements |
-| `src/types.ts` | Client message types and options |
+| `src/filter/ClaudeUiDetector.ts` | Extract semantic events from Claude CLI output |
+| `src/types.ts` | Client message types |
 
-## Message Types
+## Message Types (packages/bridge/src/types.ts)
 
-### Bridge Message Types (packages/bridge/src/types.ts)
+Strongly typed interfaces extending `BaseMessage` with `type`, `id`, `timestamp`:
 
-| Type | Direction | Description |
-|------|-----------|-------------|
-| `user_message` | Feishu → CLI | User message from Feishu |
-| `stream_chunk` | CLI → Feishu | Streaming output chunk |
-| `stream_end` | CLI → Feishu | End of stream marker |
-| `cli_response` | CLI → Feishu | Complete response |
-| `ping/pong` | Bidirectional | Heartbeat |
+| Category | Types | Description |
+|----------|-------|-------------|
+| Basic | `user_message`, `cli_response`, `stream_chunk`, `stream_end`, `ping`, `pong` | Core communication |
+| Thinking | `thinking_start`, `thinking_end`, `text_start` | Claude's thinking phase |
+| Tools | `tool_call`, `tool_result` | Tool execution tracking |
+| Prompts | `ask_user`, `prompt_confirm`, `prompt_permission`, `prompt_choice`, `prompt_plan` | Interactive prompts |
+| Status | `skill_loading`, `mcp_loading`, `compacting`, `subagent_start`, `subagent_stop` | System state events |
+| Hooks | `hook_blocked`, `hook_warning`, `notification` | Hook events |
+| Errors | `error_api`, `error_tool` | Error handling |
+| Other | `command_echo`, `context_info`, `diff_content` | Additional events |
 
-### CLI Client Message Types (packages/cli-client/src/types.ts)
+## State Machine (bridge.ts)
 
-Extended message types including: `thinking_start`, `thinking_end`, `tool_call`, `tool_result`, `prompt_*`, `error_*`, etc.
+```
+idle → thinking → tool_calling → [prompt?] → streaming → idle
+```
 
-## Output Filtering System
+- **Phase tracking**: Maintains current response phase for proper card updates
+- **Status card**: Single card patched throughout response lifecycle
+- **Tool records**: Tracks tool calls with emoji, description, status, and results
+- **Patch throttling**: 500ms throttle on card updates
+- **Flush debouncing**: 600ms debounce on streaming content
 
-The CLI client uses a multi-layer filtering approach:
+## Semantic Event Detection (ClaudeUiDetector)
 
-### PtyOutputFilter (Main Orchestrator)
-1. Accumulates data for handling split ANSI sequences
-2. Detects and filters input echo using InputTracker
-3. Parses ANSI sequences using AnsiParser
-4. Writes to VirtualTerminal for cursor handling
-5. Extracts incremental content (new lines only)
-6. Filters UI elements using ClaudeUiDetector
-7. Final cleanup (control chars, excessive blank lines)
+Extracts structured events from PTY output:
 
-### ClaudeUiDetector (UI Element Filter)
-Filters terminal UI artifacts:
-- **Spinner characters**: ✢✶✻⠁⠂⠃... (100+ chars)
-- **Box drawing chars**: ╭╮╰╯─│┌┐...
-- **Block elements**: █▉▊▋▌▍▎▏░▒▓...
-- **Prompt patterns**: `Claude>`, `Thinking...`, `Generating...`
-- **Keybinding hints**: `[Ctrl+C]`, `[Ctrl+D]`
+### Tool Detection Patterns
+- Bash, Grep, Glob, LS, Read, Edit, MultiEdit, Write
+- WebSearch, WebFetch, TodoRead, TodoWrite
+- NotebookRead, NotebookEdit, Agent, Task, Skill
+- ExitPlanMode, Sleep, LSP, MCP tools (`mcp__server__method`)
 
-## Feishu Message Formatting
+### Other Events
+- **Thinking**: `Thinking...`, `Brewing...`, `(thinking)`, etc.
+- **Prompts**: y/n confirmations, permission requests, multi-choice, plan approval
+- **Status**: Skill loading, MCP server connections, compacting, subagent start/stop
+- **Hooks**: Blocked/warning notifications
+- **Errors**: API errors (rate limit, context full), tool errors
+- **Noise**: Spinner chars, box drawing, block elements, UI hints
 
-The `OutputFormatter` class (bridge) handles:
+## Feishu Card Formatting (outputFormatter.ts)
 
-1. **ANSI/control character stripping** - All terminal escape sequences
-2. **Claude CLI prefix removal** - `Claude>`, `Thinking...`, etc.
-3. **Smart content splitting** - Long content split by paragraph/sentence (1800 char limit)
-4. **Format selection**:
-   - Card format (`lark_md` tag): Code blocks, tables, long content
-   - Post format (`md` tag): Short plain text
-5. **Title beautification** - `#` → 📌, `##` → ✨
+### Schema 2.0 Cards
+- Header with title and color template (blue/green/red/yellow/orange/grey)
+- Body with markdown, hr, collapsible_panel, action elements
+- Interactive buttons with callback behaviors
 
-## Stream Accumulation
+### Card Templates
+- `buildThinkingCard()` - Thinking indicator
+- `buildToolCard()` - Tool calls with collapsible results
+- `buildPromptConfirmCard()` - y/n confirmation with buttons
+- `buildPromptPermissionCard()` - Permission request with Allow/Deny
+- `buildPromptChoiceCard()` - Multi-choice with option buttons
+- `buildPromptPlanCard()` - Plan approval with steps
+- `buildErrorCard()`, `buildApiErrorCard()` - Error displays
+- `buildDiffCard()` - Code diff preview
 
-Bridge accumulates content before sending to Feishu:
-- **Threshold**: 200 characters
-- **Timeout**: 500ms
-- Content is buffered until either threshold is met
+### Content Splitting
+- Max card length: 3000 characters
+- Split by paragraphs, preserve code blocks
 
-## Configuration
+## Configuration (~/.feishu-bridge/config.yaml)
 
-Bridge config stored at `~/.feishu-bridge/config.yaml`:
 ```yaml
 appId: YOUR_APP_ID
 appSecret: YOUR_APP_SECRET
@@ -150,11 +162,25 @@ notifyOnDisconnection: true
 
 ## Important Patterns
 
-- **Bidirectional operation**: Local stdin is preserved, allowing simultaneous local and remote operation
+- **Bidirectional operation**: Local stdin preserved for simultaneous local/remote use
 - **Input echo filtering**: CLI client filters local/remote input echo from PTY output
-- **Incremental sending**: Only new lines are sent to avoid duplicate content
-- **Graceful degradation**: Card format falls back to Post format, Post format falls back to plain text
-- **Daemon mode**: Bridge can run as background process with PID file tracking
+- **Incremental sending**: Only new lines sent to avoid duplicates
+- **State machine**: Bridge tracks phase for proper card updates
+- **Strong typing**: Use specific interfaces (e.g., `ToolCallMessage`) not generic `BridgeMessage`
+- **Graceful degradation**: Card format falls back to Post format
+- **Daemon mode**: Bridge runs as background process with PID file tracking
+- **Button callbacks**: Interactive prompts mapped to PTY input via action callbacks
+
+## Action Callback Mapping (bridge.ts)
+
+```typescript
+const ACTION_MAP = {
+  confirm:    { y: 'y\r', n: 'n\r' },
+  permission: { '1': '1\r', '2': '2\r', '3': '3\r' },
+  choice:     { '1': '1\r', '2': '1\r', ... },
+  plan:       { y: 'y\r', n: 'n\r' },
+};
+```
 
 ## Testing
 
