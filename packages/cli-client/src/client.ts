@@ -2,17 +2,14 @@ import * as pty from 'node-pty';
 import WebSocket from 'ws';
 import http from 'http';
 import { BridgeMessage, ClientOptions, ClientState } from './types';
+import { PtyOutputFilter } from './filter';
 
 export class FeishuCliClient {
   private options: Required<ClientOptions>;
   private ws: WebSocket | null = null;
   private ptyProcess: pty.IPty | null = null;
   private state: ClientState = 'disconnected';
-
-  // 输入回显过滤
-  private inputBuffer: string = '';
-  private lastInputTime: number = 0;
-  private readonly INPUT_ECHO_TIMEOUT = 100; // 输入回显检测超时（毫秒）
+  private outputFilter: PtyOutputFilter;
 
   constructor(options: ClientOptions = {}) {
     this.options = {
@@ -20,6 +17,12 @@ export class FeishuCliClient {
       bridgeHttpUrl: options.bridgeHttpUrl || 'http://localhost:8989',
       claudeArgs: options.claudeArgs || [],
     };
+
+    // 初始化输出过滤器
+    this.outputFilter = new PtyOutputFilter({
+      terminalWidth: process.stdout.columns || 80,
+      terminalHeight: process.stdout.rows || 24,
+    });
   }
 
   async start(): Promise<void> {
@@ -84,6 +87,12 @@ export class FeishuCliClient {
       cwd: process.cwd(),
       env: process.env as { [key: string]: string },
     });
+
+    // 更新过滤器终端尺寸
+    this.outputFilter.resize(
+      process.stdout.columns || 80,
+      process.stdout.rows || 24
+    );
   }
 
   private setupDataFlow(): void {
@@ -94,46 +103,26 @@ export class FeishuCliClient {
     process.stdin.resume();
     process.stdin.on('data', (data) => {
       if (this.ptyProcess) {
-        const inputStr = data.toString();
-        // 记录输入用于过滤回显
-        this.inputBuffer += inputStr;
-        this.lastInputTime = Date.now();
-        this.ptyProcess.write(inputStr);
+        // 记录输入到过滤器（用于回显检测）
+        this.outputFilter.recordInput(data.toString());
+        this.ptyProcess.write(data.toString());
       }
     });
 
     // PTY 输出 -> stdout + WebSocket
     this.ptyProcess.onData((data) => {
-      // 本地输出始终显示
+      // 本地输出始终显示原始内容
       process.stdout.write(data);
 
-      // 过滤输入回显 - 不发送本地输入的回显到飞书
-      const timeSinceInput = Date.now() - this.lastInputTime;
-      if (timeSinceInput < this.INPUT_ECHO_TIMEOUT && this.inputBuffer.length > 0) {
-        // 检查输出是否包含输入内容（回显）
-        const inputLines = this.inputBuffer.split('\n');
-        let filteredOutput = data;
+      // 使用过滤器处理输出
+      const result = this.outputFilter.filter(data);
 
-        for (const inputLine of inputLines) {
-          if (inputLine.trim() && filteredOutput.includes(inputLine)) {
-            // 这可能是输入回显，跳过发送
-            this.inputBuffer = this.inputBuffer.slice(inputLine.length);
-            return;
-          }
-        }
-
-        // 清理过期的输入缓冲
-        if (timeSinceInput > this.INPUT_ECHO_TIMEOUT) {
-          this.inputBuffer = '';
-        }
-      }
-
-      // 发送到 WebSocket（过滤后的输出）
-      if (this.ws?.readyState === WebSocket.OPEN) {
+      // 发送过滤后的内容到 WebSocket
+      if (result.hasContent && this.ws?.readyState === WebSocket.OPEN) {
         const msg: BridgeMessage = {
           type: 'stream_chunk',
           id: Date.now().toString(),
-          content: data,
+          content: result.text,
           timestamp: Date.now(),
         };
         this.ws.send(JSON.stringify(msg));
@@ -148,6 +137,8 @@ export class FeishuCliClient {
         if (msg.type === 'user_message' && msg.content) {
           const content = msg.content.trim();
           if (this.ptyProcess) {
+            // 记录远程输入（用于回显检测）
+            this.outputFilter.recordInput(content);
             this.ptyProcess.write(content);
             this.ptyProcess.write('\r');
           }
@@ -162,6 +153,20 @@ export class FeishuCliClient {
     this.ptyProcess.onExit(async ({ exitCode }) => {
       await this.stop();
       process.exit(exitCode ?? 0);
+    });
+
+    // 终端尺寸变化
+    process.stdout.on('resize', () => {
+      if (this.ptyProcess) {
+        this.ptyProcess.resize(
+          process.stdout.columns || 80,
+          process.stdout.rows || 24
+        );
+        this.outputFilter.resize(
+          process.stdout.columns || 80,
+          process.stdout.rows || 24
+        );
+      }
     });
   }
 
@@ -190,6 +195,9 @@ export class FeishuCliClient {
       this.ptyProcess.kill();
       this.ptyProcess = null;
     }
+
+    // 重置过滤器
+    this.outputFilter.reset();
 
     this.state = 'disconnected';
   }
