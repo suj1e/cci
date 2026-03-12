@@ -1,352 +1,340 @@
 /**
  * 输出格式化工具
- * 负责清理和美化终端输出，适配飞书富文本格式
- * 参考 OpenClaw 的实现方式
+ * 飞书 Schema 2.0 卡片 + 完整卡片模板库
  */
 
+export interface FeishuCardV2 {
+  schema: '2.0';
+  header: {
+    title: { tag: 'plain_text'; content: string };
+    template: 'blue' | 'green' | 'red' | 'yellow' | 'orange' | 'grey';
+  };
+  body: {
+    elements: Array<
+      | { tag: 'markdown'; content: string }
+      | { tag: 'hr' }
+      | { tag: 'collapsible_panel'; header: { title: { tag: 'plain_text'; content: string } }; elements: Array<{ tag: 'markdown'; content: string }> }
+      | { tag: 'action'; actions: ActionButton[] }
+    >;
+  };
+}
+
+interface ActionButton {
+  tag: 'button';
+  text: { tag: 'plain_text'; content: string };
+  type: 'primary' | 'danger' | 'default';
+  value: Record<string, string>;
+  behaviors?: Array<{ type: 'callback'; value: Record<string, string> }>;
+}
+
+export interface FeishuPostContent {
+  zh_cn: {
+    title: string;
+    content: Array<Array<{ tag: string; text?: string; href?: string; language?: string; code?: string }>>;
+  };
+}
+
 export class OutputFormatter {
-  // 飞书卡片单条内容长度限制
-  private static readonly MAX_CARD_LENGTH = 1800;
+  private static readonly MAX_CARD_LENGTH = 3000;
+  private static readonly MAX_RESULT_PREVIEW = 300;
 
-  /**
-   * 清理 ANSI 转义码和终端控制序列
-   */
+  // ── 文本清理 ──────────────────────────────────────────────────────────────
+
   static stripAnsi(text: string): string {
-    return (
-      text
-        // 标准 CSI 序列: ESC [ ... letter
-        .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "")
-        // OSC 序列: ESC ] ... BEL/ST
-        .replace(/\x1b\][^\x07]*\x07/g, "")
-        .replace(/\x1b\][^\x1b]*\x1b\\/g, "")
-        // DCS/PM/APC 序列
-        .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, "")
-        // 单字符转义序列
-        .replace(/\x1b[()][AB012]/g, "")
-        .replace(/\x1b[780DM]/g, "")
-        // 其他控制序列
-        .replace(/\x1b\[\?[0-9;]*[hl]/g, "")
-        .replace(/\x1b\[\![0-9;]*[a-zA-Z]/g, "")
-        // 清理残留的 ESC 字符
-        .replace(/\x1b/g, "")
-    );
+    return text
+      .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+      .replace(/\x1b\][^\x07]*\x07/g, '')
+      .replace(/\x1b\][^\x1b]*\x1b\\/g, '')
+      .replace(/\x1b[PX^_][^\x1b]*\x1b\\/g, '')
+      .replace(/\x1b[()][AB012]/g, '')
+      .replace(/\x1b[780DM]/g, '')
+      .replace(/\x1b\[\?[0-9;]*[hl]/g, '')
+      .replace(/\x1b/g, '');
   }
 
-  /**
-   * 清理终端控制字符和残留标记
-   */
-  static stripControlChars(text: string): string {
-    return (
-      text
-        // 统一换行符
-        .replace(/\r\n/g, "\n")
-        .replace(/\r/g, "\n")
-        // 处理残留的 [0m [0G 等标记
-        .replace(/\[\d*[mGKF]/g, "")
-        .replace(/\[0m/g, "")
-        .replace(/\[0G/g, "")
-        // 处理不可见控制字符（保留换行和制表符）
-        .replace(/[\x00-\x1F\x7F]/g, (c) => (c === "\n" || c === "\t" ? c : ""))
-        // 处理退格符 ^H
-        .replace(/.\x08/g, "")
-        // 移除 NULL 和 BEL
-        .replace(/\x00/g, "")
-        .replace(/\x07/g, "")
-    );
+  static formatForFeishu(text: string): string {
+    return text
+      .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+      .replace(/\x1b/g, '')
+      .replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      .replace(/[\x00-\x08\x0B-\x1F\x7F]/g, '')
+      .replace(/.\\x08/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .split('\n').map(l => l.trimEnd()).join('\n')
+      .replace(/^\n+/, '').replace(/\n+$/, '');
   }
 
-  /**
-   * 移除 Claude CLI 的前缀提示
-   */
-  static stripClaudePrompts(text: string): string {
-    return (
-      text
-        .replace(/^Claude>\s*/gm, "")
-        .replace(/^(Thinking|Generating|Analyzing|Processing)\.*\s*/gm, "")
-        // 清理行首残留的方括号标记
-        .replace(/^\[.*?\]\s*/gm, "")
-    );
+  static hasContent(text: string): boolean {
+    return this.stripAnsi(text).trim().length > 0;
   }
 
-  /**
-   * 清理 Claude CLI 输出的所有乱码
-   */
-  static cleanOutput(raw: string): string {
-    let result = raw;
-
-    // 清理 ANSI 和控制字符
-    result = this.stripAnsi(result);
-    result = this.stripControlChars(result);
-
-    // 移除 Claude CLI 前缀
-    result = this.stripClaudePrompts(result);
-
-    // 修复被截断的 Markdown 链接
-    result = result.replace(
-      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)[\s)]/g,
-      "[$1]($2)",
-    );
-
-    // 合并多余空行（最多保留2个）
-    result = result.replace(/\n{3,}/g, "\n\n");
-
-    // 清理行首行尾空格（代码块除外）
-    result = this.trimLinesPreserveCodeBlocks(result);
-
-    // 移除开头的空行
-    result = result.replace(/^\n+/, "");
-
-    return result;
+  static shouldUseCard(text: string): boolean {
+    const clean = this.formatForFeishu(text);
+    return clean.includes('```') || clean.includes('|') || clean.length > 500;
   }
 
-  /**
-   * 清理行首行尾空格，但保留代码块内的空格
-   */
-  private static trimLinesPreserveCodeBlocks(text: string): string {
-    const lines = text.split("\n");
-    let inCodeBlock = false;
-    const result: string[] = [];
+  // ── Post 消息（短文本用）──────────────────────────────────────────────────
 
-    for (const line of lines) {
-      if (line.trim().startsWith("```")) {
-        inCodeBlock = !inCodeBlock;
-        result.push(line);
+  static toFeishuPost(text: string): FeishuPostContent {
+    const clean = this.formatForFeishu(text);
+    const rows: Array<Array<{ tag: string; text?: string; href?: string; language?: string; code?: string }>> = [];
+    let inCode = false;
+    let codeLang = '';
+    let codeLines: string[] = [];
+
+    for (const line of clean.split('\n')) {
+      if (line.startsWith('```')) {
+        if (!inCode) {
+          inCode = true;
+          codeLang = line.slice(3).trim() || 'plain';
+          codeLines = [];
+        } else {
+          rows.push([{ tag: 'code_block', language: codeLang, code: codeLines.join('\n') }]);
+          inCode = false;
+          codeLines = [];
+        }
         continue;
       }
+      if (inCode) { codeLines.push(line); continue; }
 
-      if (inCodeBlock) {
-        // 代码块内保持原样
-        result.push(line);
-      } else {
-        // 代码块外清理行尾空格
-        result.push(line.trimEnd());
-      }
-    }
-
-    return result.join("\n");
-  }
-
-  /**
-   * 格式化输出用于飞书文本消息
-   */
-  static formatForFeishu(text: string): string {
-    return this.cleanOutput(text);
-  }
-
-  /**
-   * 格式化 Claude 输出内容（美化标题、列表等）
-   */
-  static formatClaudeContent(text: string): string {
-    let content = this.cleanOutput(text);
-
-    // 优化标题显示（只处理 # 和 ##，### 保持不变）
-    content = content
-      .replace(/^# (.+)$/gm, "### 📌 $1") // 一级标题
-      .replace(/^## (.+)$/gm, "### ✨ $1") // 二级标题
-      .replace(/^(- .+)$/gm, "• $1"); // 无序列表优化
-
-    return content;
-  }
-
-  /**
-   * 智能拆分长内容（保持段落完整）
-   */
-  static splitContent(
-    content: string,
-    maxLength: number = this.MAX_CARD_LENGTH,
-  ): string[] {
-    const paragraphs = content.split("\n\n");
-    const chunks: string[] = [];
-    let current = "";
-
-    for (const para of paragraphs) {
-      if (current.length + para.length + 2 <= maxLength) {
-        current += (current ? "\n\n" : "") + para;
-      } else {
-        if (current) chunks.push(current);
-
-        // 单个段落过长则按句子拆分
-        if (para.length > maxLength) {
-          const sentences = para.split(/(?<=[。！？.!?])\s+/);
-          let sentCurrent = "";
-
-          for (const sent of sentences) {
-            if (sentCurrent.length + sent.length + 1 <= maxLength) {
-              sentCurrent += (sentCurrent ? " " : "") + sent;
-            } else {
-              if (sentCurrent) chunks.push(sentCurrent);
-              sentCurrent = sent;
-            }
-          }
-
-          current = sentCurrent;
-        } else {
-          current = para;
+      // 链接
+      const linkRe = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+      if (linkRe.test(line)) {
+        const parts: Array<{ tag: string; text?: string; href?: string }> = [];
+        let last = 0;
+        linkRe.lastIndex = 0;
+        let m;
+        while ((m = linkRe.exec(line)) !== null) {
+          if (m.index > last) parts.push({ tag: 'text', text: line.slice(last, m.index) });
+          parts.push({ tag: 'a', text: m[1], href: m[2] });
+          last = m.index + m[0].length;
         }
+        if (last < line.length) parts.push({ tag: 'text', text: line.slice(last) });
+        rows.push(parts);
+      } else {
+        rows.push([{ tag: 'text', text: line }]);
       }
     }
 
-    if (current) chunks.push(current);
+    return { zh_cn: { title: '', content: rows } };
+  }
+
+  // ── Schema 2.0 卡片（标准内容） ───────────────────────────────────────────
+
+  static toFeishuCards(text: string): FeishuCardV2[] {
+    const clean = this.formatForFeishu(text);
+    if (clean.length <= this.MAX_CARD_LENGTH) {
+      return [this.buildContentCard(clean)];
+    }
+    const chunks = this.splitContent(clean);
+    return chunks.map((chunk, i) => this.buildContentCard(chunk, chunks.length > 1 ? `${i + 1}/${chunks.length}` : undefined));
+  }
+
+  private static buildContentCard(content: string, part?: string): FeishuCardV2 {
+    return {
+      schema: '2.0',
+      header: {
+        title: { tag: 'plain_text', content: part ? `🤖 Claude (${part})` : '🤖 Claude' },
+        template: 'blue',
+      },
+      body: { elements: [{ tag: 'markdown', content }] },
+    };
+  }
+
+  static splitContent(content: string, max = this.MAX_CARD_LENGTH): string[] {
+    const paras = content.split('\n\n');
+    const chunks: string[] = [];
+    let cur = '';
+    for (const p of paras) {
+      if (cur.length + p.length + 2 <= max) {
+        cur += (cur ? '\n\n' : '') + p;
+      } else {
+        if (cur) chunks.push(cur);
+        cur = p.length > max ? p.slice(0, max) : p;
+      }
+    }
+    if (cur) chunks.push(cur);
     return chunks;
   }
 
-  /**
-   * 检测是否为有意义的输出
-   */
-  static hasContent(text: string): boolean {
-    const cleaned = this.stripAnsi(text).trim();
-    return cleaned.length > 0;
+  // ── 状态卡片模板 ──────────────────────────────────────────────────────────
+
+  static buildThinkingCard(): FeishuCardV2 {
+    return this.base('💭 Claude 思考中', 'grey', [{ tag: 'markdown', content: '💭 **思考中…**' }]);
   }
 
-  /**
-   * 生成飞书 Post 消息格式（使用 Markdown 标签）
-   * 参考 OpenClaw 实现：使用 { tag: "md", text: "..." } 支持 Markdown 渲染
-   */
-  static toFeishuPost(text: string): FeishuPostContent {
-    const cleanText = this.formatClaudeContent(text);
+  static buildToolCard(tools: ToolRecord[], stream?: { summary: string; content: string }): FeishuCardV2 {
+    const elements: FeishuCardV2['body']['elements'] = [];
 
-    return {
-      zh_cn: {
-        title: "",
-        content: [[{ tag: "md", text: cleanText }]],
+    for (const t of tools) {
+      const statusIcon = t.status === 'running' ? '⏳' : '✓';
+      const line = `${t.emoji} **${t.desc || t.name}** ${statusIcon}`;
+      if (t.result) {
+        elements.push({
+          tag: 'collapsible_panel',
+          header: { title: { tag: 'plain_text', content: `${t.emoji} ${t.desc || t.name} ${statusIcon}` } },
+          elements: [{ tag: 'markdown', content: `\`\`\`\n${t.result}\n\`\`\`` }],
+        });
+      } else {
+        elements.push({ tag: 'markdown', content: line });
+      }
+    }
+
+    if (stream) {
+      elements.push({ tag: 'hr' });
+      elements.push({ tag: 'markdown', content: `> ${stream.summary}` });
+      elements.push({ tag: 'hr' });
+      elements.push({ tag: 'markdown', content: stream.content || '⚡ **正在回复…**' });
+    }
+
+    return this.base('🤖 Claude', 'blue', elements);
+  }
+
+  static buildPromptConfirmCard(message: string): FeishuCardV2 {
+    return this.base('🤖 Claude ⚠️', 'yellow', [
+      { tag: 'markdown', content: message || '确认继续？' },
+      { tag: 'action', actions: [
+        this.btn('✅ 确认', 'primary', { action: 'confirm', value: 'y' }),
+        this.btn('❌ 取消', 'danger', { action: 'confirm', value: 'n' }),
+      ]},
+    ]);
+  }
+
+  static buildPromptPermissionCard(tool: string, target: string): FeishuCardV2 {
+    return this.base('🤖 Claude 🔐', 'yellow', [
+      { tag: 'markdown', content: `Claude 想要 **${tool}** \`${target}\`` },
+      { tag: 'action', actions: [
+        this.btn('允许一次', 'primary', { action: 'permission', value: '1' }),
+        this.btn('总是允许', 'default', { action: 'permission', value: '2' }),
+        this.btn('拒绝', 'danger', { action: 'permission', value: '3' }),
+      ]},
+    ]);
+  }
+
+  static buildPromptChoiceCard(message: string, options: string[]): FeishuCardV2 {
+    const buttons = options.map((opt, i) =>
+      this.btn(opt, 'default', { action: 'choice', value: String(i + 1) })
+    );
+    return this.base('🤖 Claude', 'blue', [
+      { tag: 'markdown', content: message },
+      { tag: 'action', actions: buttons },
+    ]);
+  }
+
+  static buildPromptPlanCard(steps: string[]): FeishuCardV2 {
+    const stepsText = steps.map((s, i) => `${i + 1}. ${s}`).join('\n');
+    return this.base('🤖 Claude 📋', 'blue', [
+      { tag: 'markdown', content: `**执行计划**\n\n${stepsText}` },
+      { tag: 'action', actions: [
+        this.btn('✅ 执行', 'primary', { action: 'plan', value: 'y' }),
+        this.btn('❌ 取消', 'danger', { action: 'plan', value: 'n' }),
+      ]},
+    ]);
+  }
+
+  static buildAskUserCard(question: string): FeishuCardV2 {
+    return this.base('🤖 Claude ❓', 'blue', [
+      { tag: 'markdown', content: `❓ ${question}\n\n（直接回复飞书即可）` },
+    ]);
+  }
+
+  static buildErrorCard(toolName: string, message: string): FeishuCardV2 {
+    return this.base('🤖 Claude ❌', 'red', [
+      {
+        tag: 'collapsible_panel',
+        header: { title: { tag: 'plain_text', content: `❌ ${toolName} 执行失败` } },
+        elements: [{ tag: 'markdown', content: `\`\`\`\n${message}\n\`\`\`` }],
       },
+    ]);
+  }
+
+  static buildApiErrorCard(errorType: 'rate_limit' | 'context_full' | 'other', message: string): FeishuCardV2 {
+    const info = {
+      rate_limit: { icon: '⏳', title: 'API 限流', body: 'Claude 触发了速率限制，正在等待重试…' },
+      context_full: { icon: '📦', title: '上下文已满', body: '对话上下文已满，建议发送 `/compact` 压缩对话后继续。' },
+      other: { icon: '⚠️', title: 'API 错误', body: message },
+    }[errorType];
+    return this.base(`🤖 Claude ${info.icon}`, 'red', [
+      { tag: 'markdown', content: `**${info.title}**\n\n${info.body}` },
+    ]);
+  }
+
+  static buildCommandEchoCard(command: string): FeishuCardV2 {
+    return this.base('🤖 Claude', 'grey', [
+      { tag: 'markdown', content: `⚙️ 已执行 \`${command}\`` },
+    ]);
+  }
+
+  static buildNotificationCard(message: string): FeishuCardV2 {
+    return this.base('🔔 Claude 通知', 'orange', [
+      { tag: 'markdown', content: message },
+    ]);
+  }
+
+  static buildHookBlockedCard(hookName: string, reason: string): FeishuCardV2 {
+    return this.base('🤖 Claude ⛔', 'red', [
+      { tag: 'markdown', content: `**Hook 拦截**：${hookName}\n\n${reason}` },
+    ]);
+  }
+
+  static buildDiffCard(content: string, fileName?: string): FeishuCardV2 {
+    const title = fileName ? `📄 ${fileName} 变更` : '📄 文件变更';
+    return this.base(title, 'grey', [
+      { tag: 'markdown', content: `\`\`\`diff\n${content}\n\`\`\`` },
+    ]);
+  }
+
+  static buildCompactingCard(auto: boolean): FeishuCardV2 {
+    return this.base('🤖 Claude', 'grey', [
+      { tag: 'markdown', content: auto ? '🗜️ 对话接近上限，正在自动压缩…' : '🗜️ 正在压缩对话…' },
+    ]);
+  }
+
+  static buildSkillLoadingCard(skillName: string, loaded?: number, total?: number): FeishuCardV2 {
+    const text = loaded !== undefined
+      ? `📚 已加载 ${loaded}${total ? `/${total}` : ''} 个 skills`
+      : `📚 加载 skill: \`${skillName}\``;
+    return this.base('🤖 Claude', 'grey', [{ tag: 'markdown', content: text }]);
+  }
+
+  // 按钮点击后的"已选择"更新卡片
+  static buildButtonDoneCard(title: string, chosen: string): FeishuCardV2 {
+    return this.base(title, 'grey', [
+      { tag: 'markdown', content: `✅ 已选择：**${chosen}**` },
+    ]);
+  }
+
+  // ── 私有工具 ──────────────────────────────────────────────────────────────
+
+  private static base(
+    title: string,
+    color: FeishuCardV2['header']['template'],
+    elements: FeishuCardV2['body']['elements'],
+  ): FeishuCardV2 {
+    return {
+      schema: '2.0',
+      header: { title: { tag: 'plain_text', content: title }, template: color },
+      body: { elements },
     };
   }
 
-  /**
-   * 生成飞书交互式卡片格式
-   * 使用 lark_md 标签完美支持 Markdown 渲染
-   */
-  static toFeishuCard(text: string): FeishuCardContent {
-    const formattedContent = this.formatClaudeContent(text);
-
+  private static btn(label: string, type: ActionButton['type'], value: Record<string, string>): ActionButton {
     return {
-      config: {
-        wide_screen_mode: true,
-        enable_forward: true,
-      },
-      header: {
-        title: {
-          tag: "plain_text",
-          content: "🤖 Claude",
-        },
-        template: "blue",
-      },
-      elements: [
-        // 分割线
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: "────────────────",
-          },
-        },
-        // 内容区域
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: formattedContent,
-          },
-        },
-      ],
+      tag: 'button',
+      text: { tag: 'plain_text', content: label },
+      type,
+      value,
+      behaviors: [{ type: 'callback', value }],
     };
-  }
-
-  /**
-   * 生成多个飞书卡片（用于长内容拆分）
-   */
-  static toFeishuCards(text: string): FeishuCardContent[] {
-    const formattedContent = this.formatClaudeContent(text);
-
-    // 内容较短直接返回单个卡片
-    if (formattedContent.length <= this.MAX_CARD_LENGTH) {
-      return [this.toFeishuCard(text)];
-    }
-
-    // 内容过长自动分块
-    const chunks = this.splitContent(formattedContent);
-    const total = chunks.length;
-
-    return chunks.map((chunk, index) => ({
-      config: {
-        wide_screen_mode: true,
-        enable_forward: true,
-      },
-      header: {
-        title: {
-          tag: "plain_text",
-          content:
-            total > 1 ? `🤖 Claude (${index + 1}/${total})` : "🤖 Claude",
-        },
-        template: "blue",
-      },
-      elements: [
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: "────────────────",
-          },
-        },
-        {
-          tag: "div",
-          text: {
-            tag: "lark_md",
-            content: chunk,
-          },
-        },
-      ],
-    }));
-  }
-
-  /**
-   * 判断内容是否适合使用卡片格式
-   * 代码块、表格、长文本等适合卡片
-   */
-  static shouldUseCard(text: string): boolean {
-    const cleanText = this.formatForFeishu(text);
-    // 包含代码块或表格时使用卡片
-    if (cleanText.includes("```") || cleanText.includes("|")) {
-      return true;
-    }
-    // 较长的内容也使用卡片
-    return cleanText.length > 500;
   }
 }
 
-/**
- * 飞书 Post 消息结构
- */
-interface FeishuPostContent {
-  zh_cn: {
-    title: string;
-    content: Array<Array<{ tag: string; text: string }>>;
-  };
-}
+// ── 工具记录类型（供 bridge 使用）────────────────────────────────────────────
 
-/**
- * 飞书交互式卡片结构
- */
-interface FeishuCardContent {
-  config: {
-    wide_screen_mode: boolean;
-    enable_forward: boolean;
-  };
-  header: {
-    title: {
-      tag: "plain_text";
-      content: string;
-    };
-    template: string;
-  };
-  elements: Array<{
-    tag: "div" | "markdown" | "hr" | "action" | "note";
-    text?: {
-      tag: "lark_md" | "plain_text";
-      content: string;
-    };
-    content?: string;
-    actions?: any[];
-  }>;
+export interface ToolRecord {
+  name: string;
+  desc: string;
+  status: 'running' | 'done';
+  emoji: string;
+  result?: string;
 }
