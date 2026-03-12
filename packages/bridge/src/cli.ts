@@ -74,7 +74,8 @@ async function startForeground(options: any): Promise<void> {
 function startDaemon(options: any): void {
   logger.info('Starting Feishu Bridge in daemon mode');
 
-  const logStream = fs.createWriteStream(getLogPath(), { flags: 'a' });
+  // Open log file for append, get file descriptor
+  const logFd = fs.openSync(getLogPath(), 'a');
 
   const child = spawn(process.execPath, [
     __filename,
@@ -83,7 +84,7 @@ function startDaemon(options: any): void {
     ...(options.config ? [`--config=${options.config}`] : [])
   ], {
     detached: true,
-    stdio: ['ignore', logStream, logStream]
+    stdio: ['ignore', logFd, logFd]
   });
 
   child.unref();
@@ -209,6 +210,119 @@ program
       }
     } catch (error: any) {
       logger.error('Failed to stop process:', error);
+    }
+  });
+
+program
+  .command('restart')
+  .description('Restart the bridge service')
+  .option('-d, --daemon', 'Run in daemon mode')
+  .option('-p, --port <port>', 'Port to listen on')
+  .option('-c, --config <path>', 'Config file path')
+  .action(async (options) => {
+    logger.info('Restarting Feishu Bridge...');
+
+    // Stop if running
+    const pid = getPid();
+    if (pid) {
+      try {
+        process.kill(pid, 'SIGTERM');
+        logger.info(`Stopping service (PID ${pid})...`);
+
+        // Wait for process to stop
+        let attempts = 0;
+        const maxAttempts = 30;
+        while (attempts < maxAttempts) {
+          try {
+            process.kill(pid, 0);
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          } catch (error: any) {
+            if (error.code === 'ESRCH') {
+              removePid();
+              break;
+            }
+          }
+        }
+
+        if (attempts === maxAttempts) {
+          logger.warn('Force killing process');
+          try {
+            process.kill(pid, 'SIGKILL');
+            removePid();
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        logger.info('Service stopped');
+      } catch (error: any) {
+        if (error.code === 'ESRCH') {
+          logger.info('Service was not running');
+          removePid();
+        } else {
+          logger.error('Failed to stop service:', error);
+          process.exit(1);
+        }
+      }
+    } else {
+      logger.info('Service was not running');
+    }
+
+    // Start service
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    if (options.daemon) {
+      startDaemon(options);
+    } else {
+      await startForeground(options);
+    }
+  });
+
+program
+  .command('logs')
+  .description('View bridge service logs')
+  .option('-n, --lines <number>', 'Number of lines to show', '20')
+  .option('-f, --follow', 'Follow log output (tail -f mode)')
+  .action((options) => {
+    const lines = parseInt(options.lines, 10) || 20;
+    const logPath = getLogPath();
+
+    if (!fs.existsSync(logPath)) {
+      logger.warn('Log file not found. Service may not have been started yet.');
+      return;
+    }
+
+    if (options.follow) {
+      logger.info(`Following logs from ${logPath}...`);
+      logger.info('Press Ctrl+C to exit\n');
+
+      // Show last N lines first
+      const initialLogs = readLog(lines);
+      if (initialLogs.length > 0) {
+        console.log(initialLogs.join('\n'));
+      }
+
+      // Follow the log file
+      const tail = spawn('tail', ['-f', logPath], {
+        stdio: ['ignore', 'inherit', 'inherit']
+      });
+
+      tail.on('error', (error) => {
+        logger.error('Failed to follow logs:', error);
+      });
+
+      process.on('SIGINT', () => {
+        tail.kill();
+        process.exit(0);
+      });
+    } else {
+      const logs = readLog(lines);
+      if (logs.length === 0) {
+        logger.info('No logs available');
+      } else {
+        console.log(logs.join('\n'));
+      }
     }
   });
 
